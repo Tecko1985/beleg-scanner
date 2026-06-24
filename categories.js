@@ -1,0 +1,29 @@
+// Kategorie-Taxonomie fuer den Beleg-Scanner.
+// Wird sowohl im Claude-Vision-Prompt (worker.js) als auch fuer den
+// Ablage-Pfad bei der Storage-Abstraktion (storage/onedrive.js) verwendet.
+//
+// "Sonstiges" ist immer der Fallback, wenn die KI sich nicht sicher ist
+// oder kein Kategoriewert aus der Liste zurueckgibt.
+
+const CATEGORIES = [
+  'Rechnungen/Hardware-Rechner',
+  'Rechnungen/Software-Lizenzen',
+  'Rechnungen/Telekommunikation',
+  'Rechnungen/Versicherungen',
+  'Rechnungen/Energie',
+  'Rechnungen/KFZ',
+  'Rechnungen/Gesundheit',
+  'Belege/Sonstiges',
+  'Notar',
+  'Vertraege',
+  'Steuern-Finanzamt',
+  'Sonstiges',
+];
+
+const FALLBACK_CATEGORY = 'Sonstiges';
+
+function isValidCategory(category) {
+  return CATEGORIES.includes(category);
+}
+
+export { CATEGORIES, FALLBACK_CATEGORY, isValidCategory };

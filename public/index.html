@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>📄 Beleg scannen</title>
+<style>
+  :root {
+    --blue: #1a56a0;
+    --green: #2d8c4e;
+    --gray: #f4f5f7;
+    --border: #dde1e8;
+    --text: #1e2330;
+    --muted: #6b7280;
+    --white: #ffffff;
+    --shadow: 0 2px 12px rgba(0,0,0,0.08);
+    --radius: 12px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', system-ui, sans-serif; background: #eef1f6; color: var(--text); min-height: 100vh; }
+  header { background: var(--blue); color: white; padding: 18px 24px; display: flex; align-items: center; gap: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); }
+  header span.icon { font-size: 1.6rem; }
+  header h1 { font-size: 1.2rem; font-weight: 700; }
+  main { max-width: 560px; margin: 0 auto; padding: 24px 20px; }
+  .card { background: var(--white); border-radius: var(--radius); box-shadow: var(--shadow); padding: 22px; margin-bottom: 18px; }
+  .card h2 { font-size: 1rem; margin-bottom: 6px; }
+  .card p.hint { font-size: 0.85rem; color: var(--muted); line-height: 1.5; margin-bottom: 14px; }
+  .btn { border: none; border-radius: 8px; padding: 14px 20px; font-size: 1rem; font-weight: 700; cursor: pointer; width: 100%; display: inline-flex; align-items: center; justify-content: center; gap: 8px; transition: opacity 0.15s; }
+  .btn:hover { opacity: 0.88; }
+  .btn:disabled { opacity: 0.6; cursor: not-allowed; }
+  .btn-blue { background: var(--blue); color: white; }
+  .btn-green { background: var(--green); color: white; }
+  .camera-label {
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+    border: 2px dashed var(--blue); border-radius: var(--radius); padding: 36px 20px; cursor: pointer; color: var(--blue);
+    font-weight: 700; font-size: 1.05rem; text-align: center;
+  }
+  .camera-label .big-icon { font-size: 2.6rem; }
+  .preview-thumb { max-width: 100%; border-radius: 8px; margin-top: 12px; display: none; }
+  .result-row { display: flex; justify-content: space-between; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 0.9rem; }
+  .result-row:last-child { border-bottom: none; }
+  .result-row .label { color: var(--muted); }
+  .result-row .value { font-weight: 600; text-align: right; }
+  .toast {
+    position: fixed; bottom: 24px; right: 24px; left: 24px; background: var(--text); color: white; padding: 14px 18px;
+    border-radius: 10px; font-size: 0.9rem; font-weight: 600; box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+    opacity: 0; transform: translateY(10px); transition: all 0.3s; z-index: 999; text-align: center;
+  }
+  .toast.show { opacity: 1; transform: translateY(0); }
+  .success-box { display: none; }
+  .success-box .big { font-size: 2.4rem; text-align: center; margin-bottom: 8px; }
+  .spinner { display: none; text-align: center; padding: 20px 0; color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <span class="icon">📄</span>
+  <h1>Beleg scannen</h1>
+</header>
+
+<main>
+  <div class="card" id="formCard">
+    <h2>📸 Foto aufnehmen</h2>
+    <p class="hint">Mach ein Foto vom Beleg, der Rechnung oder dem Schreiben. Die KI erkennt automatisch Inhalt, Kategorie und Datum.</p>
+    <label class="camera-label" for="photoInput">
+      <span class="big-icon">📷</span>
+      <span id="cameraLabelText">Foto aufnehmen</span>
+    </label>
+    <input type="file" id="photoInput" accept="image/jpeg" capture="environment" style="display:none" onchange="handlePhotoSelect(event)" />
+    <img class="preview-thumb" id="previewThumb" alt="Vorschau" />
+    <div style="margin-top:16px">
+      <button class="btn btn-green" id="submitBtn" onclick="submitPhoto()" disabled>✅ Analysieren & ablegen</button>
+    </div>
+  </div>
+
+  <div class="spinner" id="spinner">⏳ Foto wird analysiert und abgelegt…</div>
+
+  <div class="card success-box" id="successBox">
+    <div class="big">✅</div>
+    <h2 style="text-align:center">Beleg abgelegt!</h2>
+    <div id="resultDetails"></div>
+    <button class="btn btn-blue" style="margin-top:16px" onclick="resetForm()">➕ Weiteren Beleg scannen</button>
+  </div>
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script>
+  // Cloudflare-Worker nimmt das Foto entgegen, lässt es per Claude Vision
+  // analysieren und legt das Ergebnis als durchsuchbares PDF in OneDrive ab.
+  // Siehe worker.js im Repo. URL nach Deploy hier eintragen:
+  const WORKER_URL = 'https://beleg-scanner.DEIN-SUBDOMAIN.workers.dev/';
+
+  let selectedFile = null;
+
+  function handlePhotoSelect(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    selectedFile = file;
+    document.getElementById('cameraLabelText').textContent = file.name;
+    const thumb = document.getElementById('previewThumb');
+    thumb.src = URL.createObjectURL(file);
+    thumb.style.display = 'block';
+    document.getElementById('submitBtn').disabled = false;
+  }
+
+  async function submitPhoto() {
+    if (!selectedFile) return toast('Bitte zuerst ein Foto aufnehmen.');
+
+    document.getElementById('formCard').style.display = 'none';
+    document.getElementById('spinner').style.display = 'block';
+
+    try {
+      const form = new FormData();
+      form.append('photo', selectedFile);
+
+      const res = await fetch(WORKER_URL, { method: 'POST', body: form });
+      const result = await res.json().catch(() => ({}));
+      if (!res.ok || !result.ok) throw new Error(result.error || `Server-Fehler (${res.status})`);
+
+      showResult(result);
+    } catch (e) {
+      toast('❌ Fehlgeschlagen: ' + e.message);
+      document.getElementById('formCard').style.display = 'block';
+    } finally {
+      document.getElementById('spinner').style.display = 'none';
+    }
+  }
+
+  function showResult(result) {
+    const details = document.getElementById('resultDetails');
+    const rows = [
+      ['Kategorie', result.kategorie],
+      ['Aussteller', result.aussteller || '–'],
+      ['Datum', result.datum || '–'],
+      ['Betrag', result.betrag || '–'],
+      ['Abgelegt unter', result.pfad],
+    ];
+    details.innerHTML = rows.map(([label, value]) => `
+      <div class="result-row">
+        <span class="label">${escapeHtml(label)}</span>
+        <span class="value">${escapeHtml(value)}</span>
+      </div>
+    `).join('');
+    document.getElementById('successBox').style.display = 'block';
+  }
+
+  function escapeHtml(str) {
+    return String(str ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  function resetForm() {
+    selectedFile = null;
+    document.getElementById('photoInput').value = '';
+    document.getElementById('cameraLabelText').textContent = 'Foto aufnehmen';
+    document.getElementById('previewThumb').style.display = 'none';
+    document.getElementById('submitBtn').disabled = true;
+    document.getElementById('successBox').style.display = 'none';
+    document.getElementById('formCard').style.display = 'block';
+  }
+
+  function toast(msg) {
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.classList.add('show');
+    setTimeout(() => t.classList.remove('show'), 3500);
+  }
+</script>
+</body>
+</html>
