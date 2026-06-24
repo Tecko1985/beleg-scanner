@@ -1,6 +1,6 @@
 // Cloudflare Worker: nimmt ein Beleg-Foto vom Handy entgegen, laesst es von
-// Claude Vision analysieren (Text + Kategorie), baut daraus ein durchsuchbares
-// PDF und legt es im passenden Kategorie-Ordner in OneDrive ab.
+// Google Gemini (kostenloser Tier) analysieren (Text + Kategorie), baut daraus
+// ein durchsuchbares PDF und legt es im passenden Kategorie-Ordner in OneDrive ab.
 //
 // Deploy: Cloudflare Dashboard -> Workers & Pages -> Worker erstellen -> Code
 // dieser Datei einfuegen. Da dieser Worker mehrere Module importiert
@@ -11,7 +11,7 @@
 // entfernen.
 //
 // Benoetigte Secrets (Cloudflare Dashboard -> Settings -> Variables):
-//   ANTHROPIC_API_KEY, MS_CLIENT_ID, MS_CLIENT_SECRET, MS_REFRESH_TOKEN
+//   GEMINI_API_KEY, MS_CLIENT_ID, MS_CLIENT_SECRET, MS_REFRESH_TOKEN
 
 import { CATEGORIES, FALLBACK_CATEGORY, isValidCategory } from './categories.js';
 import { buildSearchablePdf } from './pdf.js';
@@ -45,7 +45,7 @@ function sanitizeForFilename(text, maxLen = 40) {
     .slice(0, maxLen) || 'Unbekannt';
 }
 
-async function analyzeWithClaude(env, base64Image) {
+async function analyzeWithGemini(env, base64Image) {
   const prompt =
     'Du analysierst das Foto eines Papierdokuments (Rechnung, Beleg, Notarschreiben o.ae.). ' +
     'Antworte ausschliesslich mit einem JSON-Objekt (keine Markdown-Codeblocks, kein Fliesstext) ' +
@@ -60,40 +60,35 @@ async function analyzeWithClaude(env, base64Image) {
     'Waehle "kategorie" so genau wie moeglich passend zur Liste. Wenn du unsicher bist, nutze "' +
     FALLBACK_CATEGORY + '".';
 
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${env.GEMINI_API_KEY}`;
+  const res = await fetch(url, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': env.ANTHROPIC_API_KEY,
-      'anthropic-version': '2023-06-01',
-    },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 1500,
-      messages: [
+      contents: [
         {
-          role: 'user',
-          content: [
-            { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: base64Image } },
-            { type: 'text', text: prompt },
+          parts: [
+            { inline_data: { mime_type: 'image/jpeg', data: base64Image } },
+            { text: prompt },
           ],
         },
       ],
+      generationConfig: { response_mime_type: 'application/json' },
     }),
   });
   if (!res.ok) {
     const detail = await res.text().catch(() => '');
-    throw new Error(`Claude-Vision-Aufruf fehlgeschlagen (${res.status}): ${detail}`);
+    throw new Error(`Gemini-Vision-Aufruf fehlgeschlagen (${res.status}): ${detail}`);
   }
   const data = await res.json();
-  const textBlock = data.content?.find(c => c.type === 'text');
-  if (!textBlock) throw new Error('Claude-Antwort enthielt keinen Text-Block');
+  const text = data.candidates?.[0]?.content?.parts?.find(p => p.text)?.text;
+  if (!text) throw new Error('Gemini-Antwort enthielt keinen Text-Block');
 
   let parsed;
   try {
-    parsed = JSON.parse(textBlock.text);
+    parsed = JSON.parse(text);
   } catch {
-    throw new Error('Claude-Antwort war kein gueltiges JSON: ' + textBlock.text.slice(0, 200));
+    throw new Error('Gemini-Antwort war kein gueltiges JSON: ' + text.slice(0, 200));
   }
   if (!isValidCategory(parsed.kategorie)) parsed.kategorie = FALLBACK_CATEGORY;
   return parsed;
@@ -133,7 +128,7 @@ export default {
       const jpegBytes = new Uint8Array(await file.arrayBuffer());
       const base64Image = bytesToBase64(jpegBytes);
 
-      const analysis = await analyzeWithClaude(env, base64Image);
+      const analysis = await analyzeWithGemini(env, base64Image);
 
       const pdfBytes = buildSearchablePdf(jpegBytes, analysis.volltext || '');
 
