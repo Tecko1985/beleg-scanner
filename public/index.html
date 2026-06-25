@@ -86,10 +86,10 @@
 <div class="toast" id="toast"></div>
 
 <script>
-  // Cloudflare-Worker nimmt das Foto entgegen, lässt es per Claude Vision
+  // Cloudflare-Worker nimmt das Foto entgegen, lässt es per Google Gemini
   // analysieren und legt das Ergebnis als durchsuchbares PDF in OneDrive ab.
-  // Siehe worker.js im Repo. URL nach Deploy hier eintragen:
-  const WORKER_URL = 'https://beleg-scanner.DEIN-SUBDOMAIN.workers.dev/';
+  // Siehe worker.js im Repo.
+  const WORKER_URL = 'https://beleg-scanner.michel-brunner.workers.dev/';
 
   let selectedFile = null;
 

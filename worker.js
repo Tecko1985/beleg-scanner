@@ -37,7 +37,7 @@ function jsonResponse(body, status = 200) {
 }
 
 function sanitizeForFilename(text, maxLen = 40) {
-  return (text || '')
+  return String(text ?? '')
     .normalize('NFKD')
     .replace(/[̀-ͯ]/g, '') // Akzente entfernen (Aussteller-Namen vereinheitlichen)
     .replace(/[^a-zA-Z0-9]+/g, '-')

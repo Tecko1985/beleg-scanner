@@ -35,7 +35,6 @@ function isValidCategory(category) {
 
 // --- pdf.js ------------------------------------------------------------------
 
-const PAGE_MARGIN_PT = 0;
 const MAX_PAGE_WIDTH_PT = 1000;
 const FONT_SIZE_PT = 9;
 const LINE_HEIGHT_PT = 11;
@@ -46,6 +45,7 @@ function readJpegInfo(bytes) {
     throw new Error('Kein gueltiges JPEG (fehlender SOI-Marker)');
   }
   let offset = 2;
+  let orientation = 1;
   while (offset < bytes.length) {
     if (bytes[offset] !== 0xff) { offset++; continue; }
     const marker = bytes[offset + 1];
@@ -54,24 +54,77 @@ function readJpegInfo(bytes) {
       const height = (bytes[offset + 5] << 8) | bytes[offset + 6];
       const width = (bytes[offset + 7] << 8) | bytes[offset + 8];
       const numComponents = bytes[offset + 9];
-      return { width, height, numComponents };
+      return { width, height, numComponents, orientation };
     }
     if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) {
       offset += 2;
       continue;
     }
     const segmentLength = (bytes[offset + 2] << 8) | bytes[offset + 3];
+    if (marker === 0xe1) {
+      const found = readExifOrientation(bytes, offset + 4);
+      if (found) orientation = found;
+    }
     offset += 2 + segmentLength;
   }
   throw new Error('JPEG-Abmessungen konnten nicht ermittelt werden (kein SOF-Marker gefunden)');
 }
 
+// Handy-Fotos (v.a. Hochformat) speichern oft unrotierte Pixel + EXIF-Orientation-Tag.
+// /DCTDecode in PDF ignoriert diesen Tag, daher muss buildSearchablePdf ihn selbst anwenden.
+function readExifOrientation(bytes, payloadStart) {
+  if (
+    bytes[payloadStart] !== 0x45 || bytes[payloadStart + 1] !== 0x78 ||
+    bytes[payloadStart + 2] !== 0x69 || bytes[payloadStart + 3] !== 0x66
+  ) {
+    return null;
+  }
+  const tiffStart = payloadStart + 6;
+  const littleEndian = bytes[tiffStart] === 0x49;
+  const readU16 = (p) => (littleEndian ? bytes[p] | (bytes[p + 1] << 8) : (bytes[p] << 8) | bytes[p + 1]);
+  const readU32 = (p) =>
+    (littleEndian
+      ? bytes[p] | (bytes[p + 1] << 8) | (bytes[p + 2] << 16) | (bytes[p + 3] << 24)
+      : (bytes[p] << 24) | (bytes[p + 1] << 16) | (bytes[p + 2] << 8) | bytes[p + 3]) >>> 0;
+  const ifd0Start = tiffStart + readU32(tiffStart + 4);
+  const numEntries = readU16(ifd0Start);
+  for (let i = 0; i < numEntries; i++) {
+    const entryOffset = ifd0Start + 2 + i * 12;
+    if (readU16(entryOffset) === 0x0112) {
+      return readU16(entryOffset + 8);
+    }
+  }
+  return null;
+}
+
+function getOrientationMatrix(orientation, w, h) {
+  switch (orientation) {
+    case 2: return [-w, 0, 0, h, w, 0];
+    case 3: return [-w, 0, 0, -h, w, h];
+    case 4: return [w, 0, 0, -h, 0, h];
+    case 5: return [0, -w, -h, 0, h, w];
+    case 6: return [0, -w, h, 0, 0, w];
+    case 7: return [0, w, h, 0, 0, 0];
+    case 8: return [0, w, -h, 0, h, 0];
+    default: return [w, 0, 0, h, 0, 0];
+  }
+}
+
+const WIN_ANSI_EXTRA = {
+  0x20ac: 0x80, 0x201a: 0x82, 0x0192: 0x83, 0x201e: 0x84, 0x2026: 0x85,
+  0x2020: 0x86, 0x2021: 0x87, 0x02c6: 0x88, 0x2030: 0x89, 0x0160: 0x8a,
+  0x2039: 0x8b, 0x0152: 0x8c, 0x017d: 0x8e, 0x2018: 0x91, 0x2019: 0x92,
+  0x201c: 0x93, 0x201d: 0x94, 0x2022: 0x95, 0x2013: 0x96, 0x2014: 0x97,
+  0x02dc: 0x98, 0x2122: 0x99, 0x0161: 0x9a, 0x203a: 0x9b, 0x0153: 0x9c,
+  0x017e: 0x9e, 0x0178: 0x9f,
+};
+
 function escapePdfText(str) {
   let out = '';
   for (const ch of String(str ?? '')) {
     let code = ch.codePointAt(0);
-    if (code === 0x20ac) code = 0x80;
-    if (code > 0xff) code = 0x3f;
+    if (code in WIN_ANSI_EXTRA) code = WIN_ANSI_EXTRA[code];
+    else if (code > 0xff) code = 0x3f;
     if (code === 0x28 || code === 0x29 || code === 0x5c) {
       out += '\\' + String.fromCharCode(code);
     } else if (code < 0x20) {
@@ -117,17 +170,22 @@ function strToBytes(str) {
 }
 
 function buildSearchablePdf(jpegBytes, fullText) {
-  const { width: imgW, height: imgH, numComponents } = readJpegInfo(jpegBytes);
+  const { width: imgW, height: imgH, numComponents, orientation } = readJpegInfo(jpegBytes);
   const colorSpace = numComponents === 1 ? '/DeviceGray' : numComponents === 4 ? '/DeviceCMYK' : '/DeviceRGB';
 
-  const scale = imgW > MAX_PAGE_WIDTH_PT ? MAX_PAGE_WIDTH_PT / imgW : 1;
-  const pageW = Math.round(imgW * scale);
-  const pageH = Math.round(imgH * scale);
+  const swapped = orientation >= 5 && orientation <= 8;
+  const dispW = swapped ? imgH : imgW;
+  const dispH = swapped ? imgW : imgH;
+
+  const scale = dispW > MAX_PAGE_WIDTH_PT ? MAX_PAGE_WIDTH_PT / dispW : 1;
+  const pageW = Math.round(dispW * scale);
+  const pageH = Math.round(dispH * scale);
+  const imgMatrix = getOrientationMatrix(orientation, Math.round(imgW * scale), Math.round(imgH * scale));
 
   const lines = wrapText(fullText, CHARS_PER_LINE);
 
   let content = '';
-  content += `q ${pageW} 0 0 ${pageH} ${PAGE_MARGIN_PT} ${PAGE_MARGIN_PT} cm /Im0 Do Q\n`;
+  content += `q ${imgMatrix.join(' ')} cm /Im0 Do Q\n`;
   content += 'BT\n';
   content += '3 Tr\n';
   content += `/F0 ${FONT_SIZE_PT} Tf\n`;
@@ -196,7 +254,10 @@ function buildSearchablePdf(jpegBytes, fullText) {
 
 const TOKEN_URL = 'https://login.microsoftonline.com/common/oauth2/v2.0/token';
 const GRAPH_BASE = 'https://graph.microsoft.com/v1.0';
-const ROOT_FOLDER = 'Belege';
+// Nicht "Belege" nennen: kollidiert mit der gleichnamigen Kategorie "Belege/Sonstiges".
+const ROOT_FOLDER = 'Beleg-Scanner';
+const SIMPLE_UPLOAD_LIMIT = 4 * 1024 * 1024;
+const UPLOAD_CHUNK_SIZE = 10 * 1024 * 1024;
 
 async function getAccessToken(env) {
   const body = new URLSearchParams({
@@ -222,9 +283,17 @@ async function getAccessToken(env) {
 async function uploadDocument(env, { category, filename, bytes }) {
   const accessToken = await getAccessToken(env);
   const path = `${ROOT_FOLDER}/${category}/${filename}`;
-  const url = `${GRAPH_BASE}/me/drive/root:/${path.split('/').map(encodeURIComponent).join('/')}:/content`;
+  const encodedPath = path.split('/').map(encodeURIComponent).join('/');
 
-  const res = await fetch(url, {
+  if (bytes.length <= SIMPLE_UPLOAD_LIMIT) {
+    return uploadSimple(accessToken, path, encodedPath, bytes);
+  }
+  // Microsoft Graph verlangt fuer Dateien >4MB eine Upload-Session statt PUT .../content
+  return uploadInChunks(accessToken, path, encodedPath, bytes);
+}
+
+async function uploadSimple(accessToken, path, encodedPath, bytes) {
+  const res = await fetch(`${GRAPH_BASE}/me/drive/root:/${encodedPath}:/content`, {
     method: 'PUT',
     headers: {
       Authorization: `Bearer ${accessToken}`,
@@ -238,6 +307,41 @@ async function uploadDocument(env, { category, filename, bytes }) {
   }
   const data = await res.json();
   return { path, webUrl: data.webUrl };
+}
+
+async function uploadInChunks(accessToken, path, encodedPath, bytes) {
+  const sessionRes = await fetch(`${GRAPH_BASE}/me/drive/root:/${encodedPath}:/createUploadSession`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ item: { '@microsoft.graph.conflictBehavior': 'replace' } }),
+  });
+  if (!sessionRes.ok) {
+    const detail = await sessionRes.text().catch(() => '');
+    throw new Error(`OneDrive-Upload-Session fehlgeschlagen (${sessionRes.status}) fuer ${path}: ${detail}`);
+  }
+  const { uploadUrl } = await sessionRes.json();
+
+  let offset = 0;
+  let lastData = null;
+  while (offset < bytes.length) {
+    const end = Math.min(offset + UPLOAD_CHUNK_SIZE, bytes.length);
+    const chunk = bytes.subarray(offset, end);
+    const res = await fetch(uploadUrl, {
+      method: 'PUT',
+      headers: {
+        'Content-Length': String(chunk.length),
+        'Content-Range': `bytes ${offset}-${end - 1}/${bytes.length}`,
+      },
+      body: chunk,
+    });
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '');
+      throw new Error(`OneDrive-Upload (Chunk ${offset}-${end - 1}) fehlgeschlagen (${res.status}) fuer ${path}: ${detail}`);
+    }
+    if (end === bytes.length) lastData = await res.json();
+    offset = end;
+  }
+  return { path, webUrl: lastData?.webUrl };
 }
 
 // --- worker.js ---------------------------------------------------------------
@@ -262,7 +366,7 @@ function jsonResponse(body, status = 200) {
 }
 
 function sanitizeForFilename(text, maxLen = 40) {
-  return (text || '')
+  return String(text ?? '')
     .normalize('NFKD')
     .replace(/[̀-ͯ]/g, '')
     .replace(/[^a-zA-Z0-9]+/g, '-')
