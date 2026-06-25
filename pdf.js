@@ -157,61 +157,32 @@ function strToBytes(str) {
 }
 
 /**
- * Erzeugt ein durchsuchbares PDF.
- * @param {Uint8Array} jpegBytes - Original-Foto als JPEG.
- * @param {string} fullText - Von der KI extrahierter Volltext (wird unsichtbar eingebettet).
+ * Erzeugt ein durchsuchbares PDF, eine Seite pro Bild.
+ * @param {Uint8Array|Uint8Array[]} images - Ein oder mehrere Foto-Seiten desselben Dokuments (JPEG), in Reihenfolge.
+ * @param {string} fullText - Von der KI extrahierter Volltext (wird unsichtbar auf jede Seite gelegt).
  * @returns {Uint8Array} Komplette PDF-Datei.
  */
-function buildSearchablePdf(jpegBytes, fullText) {
-  const { width: imgW, height: imgH, numComponents, orientation } = readJpegInfo(jpegBytes);
-  const colorSpace = numComponents === 1 ? '/DeviceGray' : numComponents === 4 ? '/DeviceCMYK' : '/DeviceRGB';
+function buildSearchablePdf(images, fullText) {
+  const imageList = Array.isArray(images) ? images : [images];
+  if (imageList.length === 0) {
+    throw new Error('buildSearchablePdf benoetigt mindestens ein Bild');
+  }
+  const numPages = imageList.length;
 
-  // Bei 90/270-Grad-Drehung (Orientation 5-8) vertauschen sich Anzeige-Breite/-Hoehe.
-  const swapped = orientation >= 5 && orientation <= 8;
-  const dispW = swapped ? imgH : imgW;
-  const dispH = swapped ? imgW : imgH;
-
-  // Seitengroesse = Anzeigegroesse (in pt, 1px = 1pt), gekappt auf MAX_PAGE_WIDTH_PT.
-  const scale = dispW > MAX_PAGE_WIDTH_PT ? MAX_PAGE_WIDTH_PT / dispW : 1;
-  const pageW = Math.round(dispW * scale);
-  const pageH = Math.round(dispH * scale);
-  const imgMatrix = getOrientationMatrix(orientation, Math.round(imgW * scale), Math.round(imgH * scale));
+  // Objekt-Layout (N = Seitenzahl): 1=Catalog, 2=Pages, dann je Seite i (0-basiert)
+  // 3 Objekte: Page=3+3i, Content=4+3i, Image=5+3i. Danach 1 gemeinsames Font-Objekt.
+  // Fuer N=1 identisch zur fruehen Single-Page-Nummerierung (1..6).
+  const pageNum = (i) => 3 + i * 3;
+  const contentNum = (i) => 4 + i * 3;
+  const imageNum = (i) => 5 + i * 3;
+  const fontNum = 3 + numPages * 3;
+  const numObjects = fontNum + 1; // Objekt 0 existiert nicht (Free-Object)
 
   const lines = wrapText(fullText, CHARS_PER_LINE);
 
-  // --- Content-Stream: Bild (EXIF-korrekt rotiert) zeichnen, dann unsichtbaren Text drueberlegen ---
-  let content = '';
-  content += `q ${imgMatrix.join(' ')} cm /Im0 Do Q\n`;
-  content += 'BT\n';
-  content += '3 Tr\n'; // Render-Mode 3 = unsichtbar (aber selektierbar/durchsuchbar)
-  content += `/F0 ${FONT_SIZE_PT} Tf\n`;
-  content += `${LINE_HEIGHT_PT} TL\n`;
-  let y = pageH - 14;
-  content += `1 0 0 1 4 ${y} Tm\n`;
-  for (const line of lines) {
-    content += `(${escapePdfText(line)}) Tj T*\n`;
-  }
-  content += 'ET\n';
-
-  const contentBytes = strToBytes(content);
-
-  // --- PDF-Objekte zusammensetzen ---
-  const objects = [];
-  objects.push('<< /Type /Catalog /Pages 2 0 R >>');
-  objects.push('<< /Type /Pages /Kids [3 0 R] /Count 1 >>');
-  objects.push(
-    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageW} ${pageH}] ` +
-      '/Resources << /XObject << /Im0 5 0 R >> /Font << /F0 6 0 R >> >> /Contents 4 0 R >>'
-  );
-  // Objekt 4 (Content-Stream) und 5 (Bild-XObject) werden unten als Binaer-Teile gebaut, da sie
-  // rohe Bytes (Stream-Daten) enthalten - kein reiner Text wie die anderen Objekte.
-  objects.push(null); // Platzhalter Index 3 (Objekt 4)
-  objects.push(null); // Platzhalter Index 4 (Objekt 5)
-  objects.push('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>');
-
   const header = strToBytes('%PDF-1.4\n');
   const parts = [header];
-  const offsets = [0]; // Objekt 0 existiert nicht (Free-Object), Index ab 1 relevant
+  const offsets = [0];
   let currentOffset = header.length;
 
   function pushObject(num, bodyBytesArray) {
@@ -222,28 +193,74 @@ function buildSearchablePdf(jpegBytes, fullText) {
     currentOffset += objHeader.length + bodyBytesArray.reduce((s, b) => s + b.length, 0) + objFooter.length;
   }
 
-  pushObject(1, [strToBytes(objects[0])]);
-  pushObject(2, [strToBytes(objects[1])]);
-  pushObject(3, [strToBytes(objects[2])]);
-  pushObject(4, [strToBytes(`<< /Length ${contentBytes.length} >>\nstream\n`), contentBytes, strToBytes('\nendstream')]);
-  pushObject(5, [
-    strToBytes(
-      `<< /Type /XObject /Subtype /Image /Width ${imgW} /Height ${imgH} /ColorSpace ${colorSpace} ` +
-        `/BitsPerComponent 8 /Filter /DCTDecode /Length ${jpegBytes.length} >>\nstream\n`
-    ),
-    jpegBytes,
-    strToBytes('\nendstream'),
-  ]);
-  pushObject(6, [strToBytes(objects[5])]);
+  pushObject(1, [strToBytes('<< /Type /Catalog /Pages 2 0 R >>')]);
+
+  const kids = [];
+  for (let i = 0; i < numPages; i++) kids.push(`${pageNum(i)} 0 R`);
+  pushObject(2, [strToBytes(`<< /Type /Pages /Kids [${kids.join(' ')}] /Count ${numPages} >>`)]);
+
+  for (let i = 0; i < numPages; i++) {
+    const jpegBytes = imageList[i];
+    const { width: imgW, height: imgH, numComponents, orientation } = readJpegInfo(jpegBytes);
+    const colorSpace = numComponents === 1 ? '/DeviceGray' : numComponents === 4 ? '/DeviceCMYK' : '/DeviceRGB';
+
+    // Bei 90/270-Grad-Drehung (Orientation 5-8) vertauschen sich Anzeige-Breite/-Hoehe.
+    const swapped = orientation >= 5 && orientation <= 8;
+    const dispW = swapped ? imgH : imgW;
+    const dispH = swapped ? imgW : imgH;
+
+    // Seitengroesse = Anzeigegroesse (in pt, 1px = 1pt), gekappt auf MAX_PAGE_WIDTH_PT.
+    const scale = dispW > MAX_PAGE_WIDTH_PT ? MAX_PAGE_WIDTH_PT / dispW : 1;
+    const pageW = Math.round(dispW * scale);
+    const pageH = Math.round(dispH * scale);
+    const imgMatrix = getOrientationMatrix(orientation, Math.round(imgW * scale), Math.round(imgH * scale));
+
+    // --- Content-Stream: Bild (EXIF-korrekt rotiert) zeichnen, dann unsichtbaren Text drueberlegen ---
+    let content = '';
+    content += `q ${imgMatrix.join(' ')} cm /Im0 Do Q\n`;
+    content += 'BT\n';
+    content += '3 Tr\n'; // Render-Mode 3 = unsichtbar (aber selektierbar/durchsuchbar)
+    content += `/F0 ${FONT_SIZE_PT} Tf\n`;
+    content += `${LINE_HEIGHT_PT} TL\n`;
+    const y = pageH - 14;
+    content += `1 0 0 1 4 ${y} Tm\n`;
+    // Voller Volltext liegt auf jeder Seite (statt seitengenauer Zuordnung) - fuer
+    // Volltextsuche in OneDrive reicht "Text existiert irgendwo in der Datei".
+    for (const line of lines) {
+      content += `(${escapePdfText(line)}) Tj T*\n`;
+    }
+    content += 'ET\n';
+    const contentBytes = strToBytes(content);
+
+    pushObject(pageNum(i), [
+      strToBytes(
+        `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageW} ${pageH}] ` +
+          `/Resources << /XObject << /Im0 ${imageNum(i)} 0 R >> /Font << /F0 ${fontNum} 0 R >> >> /Contents ${contentNum(i)} 0 R >>`
+      ),
+    ]);
+    pushObject(contentNum(i), [
+      strToBytes(`<< /Length ${contentBytes.length} >>\nstream\n`),
+      contentBytes,
+      strToBytes('\nendstream'),
+    ]);
+    pushObject(imageNum(i), [
+      strToBytes(
+        `<< /Type /XObject /Subtype /Image /Width ${imgW} /Height ${imgH} /ColorSpace ${colorSpace} ` +
+          `/BitsPerComponent 8 /Filter /DCTDecode /Length ${jpegBytes.length} >>\nstream\n`
+      ),
+      jpegBytes,
+      strToBytes('\nendstream'),
+    ]);
+  }
+
+  pushObject(fontNum, [strToBytes('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>')]);
 
   const xrefStart = currentOffset;
-  const numObjects = 7; // 0..6
   let xref = `xref\n0 ${numObjects}\n0000000000 65535 f \n`;
   for (let i = 1; i < numObjects; i++) {
     xref += `${String(offsets[i]).padStart(10, '0')} 00000 n \n`;
   }
-  const trailer =
-    `trailer\n<< /Size ${numObjects} /Root 1 0 R >>\nstartxref\n${xrefStart}\n%%EOF`;
+  const trailer = `trailer\n<< /Size ${numObjects} /Root 1 0 R >>\nstartxref\n${xrefStart}\n%%EOF`;
 
   parts.push(strToBytes(xref), strToBytes(trailer));
 

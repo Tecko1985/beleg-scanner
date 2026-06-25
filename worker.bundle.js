@@ -169,46 +169,20 @@ function strToBytes(str) {
   return out;
 }
 
-function buildSearchablePdf(jpegBytes, fullText) {
-  const { width: imgW, height: imgH, numComponents, orientation } = readJpegInfo(jpegBytes);
-  const colorSpace = numComponents === 1 ? '/DeviceGray' : numComponents === 4 ? '/DeviceCMYK' : '/DeviceRGB';
+function buildSearchablePdf(images, fullText) {
+  const imageList = Array.isArray(images) ? images : [images];
+  if (imageList.length === 0) {
+    throw new Error('buildSearchablePdf benoetigt mindestens ein Bild');
+  }
+  const numPages = imageList.length;
 
-  const swapped = orientation >= 5 && orientation <= 8;
-  const dispW = swapped ? imgH : imgW;
-  const dispH = swapped ? imgW : imgH;
-
-  const scale = dispW > MAX_PAGE_WIDTH_PT ? MAX_PAGE_WIDTH_PT / dispW : 1;
-  const pageW = Math.round(dispW * scale);
-  const pageH = Math.round(dispH * scale);
-  const imgMatrix = getOrientationMatrix(orientation, Math.round(imgW * scale), Math.round(imgH * scale));
+  const pageNum = (i) => 3 + i * 3;
+  const contentNum = (i) => 4 + i * 3;
+  const imageNum = (i) => 5 + i * 3;
+  const fontNum = 3 + numPages * 3;
+  const numObjects = fontNum + 1;
 
   const lines = wrapText(fullText, CHARS_PER_LINE);
-
-  let content = '';
-  content += `q ${imgMatrix.join(' ')} cm /Im0 Do Q\n`;
-  content += 'BT\n';
-  content += '3 Tr\n';
-  content += `/F0 ${FONT_SIZE_PT} Tf\n`;
-  content += `${LINE_HEIGHT_PT} TL\n`;
-  let y = pageH - 14;
-  content += `1 0 0 1 4 ${y} Tm\n`;
-  for (const line of lines) {
-    content += `(${escapePdfText(line)}) Tj T*\n`;
-  }
-  content += 'ET\n';
-
-  const contentBytes = strToBytes(content);
-
-  const objects = [];
-  objects.push('<< /Type /Catalog /Pages 2 0 R >>');
-  objects.push('<< /Type /Pages /Kids [3 0 R] /Count 1 >>');
-  objects.push(
-    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageW} ${pageH}] ` +
-      '/Resources << /XObject << /Im0 5 0 R >> /Font << /F0 6 0 R >> >> /Contents 4 0 R >>'
-  );
-  objects.push(null);
-  objects.push(null);
-  objects.push('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>');
 
   const header = strToBytes('%PDF-1.4\n');
   const parts = [header];
@@ -223,22 +197,64 @@ function buildSearchablePdf(jpegBytes, fullText) {
     currentOffset += objHeader.length + bodyBytesArray.reduce((s, b) => s + b.length, 0) + objFooter.length;
   }
 
-  pushObject(1, [strToBytes(objects[0])]);
-  pushObject(2, [strToBytes(objects[1])]);
-  pushObject(3, [strToBytes(objects[2])]);
-  pushObject(4, [strToBytes(`<< /Length ${contentBytes.length} >>\nstream\n`), contentBytes, strToBytes('\nendstream')]);
-  pushObject(5, [
-    strToBytes(
-      `<< /Type /XObject /Subtype /Image /Width ${imgW} /Height ${imgH} /ColorSpace ${colorSpace} ` +
-        `/BitsPerComponent 8 /Filter /DCTDecode /Length ${jpegBytes.length} >>\nstream\n`
-    ),
-    jpegBytes,
-    strToBytes('\nendstream'),
-  ]);
-  pushObject(6, [strToBytes(objects[5])]);
+  pushObject(1, [strToBytes('<< /Type /Catalog /Pages 2 0 R >>')]);
+
+  const kids = [];
+  for (let i = 0; i < numPages; i++) kids.push(`${pageNum(i)} 0 R`);
+  pushObject(2, [strToBytes(`<< /Type /Pages /Kids [${kids.join(' ')}] /Count ${numPages} >>`)]);
+
+  for (let i = 0; i < numPages; i++) {
+    const jpegBytes = imageList[i];
+    const { width: imgW, height: imgH, numComponents, orientation } = readJpegInfo(jpegBytes);
+    const colorSpace = numComponents === 1 ? '/DeviceGray' : numComponents === 4 ? '/DeviceCMYK' : '/DeviceRGB';
+
+    const swapped = orientation >= 5 && orientation <= 8;
+    const dispW = swapped ? imgH : imgW;
+    const dispH = swapped ? imgW : imgH;
+
+    const scale = dispW > MAX_PAGE_WIDTH_PT ? MAX_PAGE_WIDTH_PT / dispW : 1;
+    const pageW = Math.round(dispW * scale);
+    const pageH = Math.round(dispH * scale);
+    const imgMatrix = getOrientationMatrix(orientation, Math.round(imgW * scale), Math.round(imgH * scale));
+
+    let content = '';
+    content += `q ${imgMatrix.join(' ')} cm /Im0 Do Q\n`;
+    content += 'BT\n';
+    content += '3 Tr\n';
+    content += `/F0 ${FONT_SIZE_PT} Tf\n`;
+    content += `${LINE_HEIGHT_PT} TL\n`;
+    const y = pageH - 14;
+    content += `1 0 0 1 4 ${y} Tm\n`;
+    for (const line of lines) {
+      content += `(${escapePdfText(line)}) Tj T*\n`;
+    }
+    content += 'ET\n';
+    const contentBytes = strToBytes(content);
+
+    pushObject(pageNum(i), [
+      strToBytes(
+        `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageW} ${pageH}] ` +
+          `/Resources << /XObject << /Im0 ${imageNum(i)} 0 R >> /Font << /F0 ${fontNum} 0 R >> >> /Contents ${contentNum(i)} 0 R >>`
+      ),
+    ]);
+    pushObject(contentNum(i), [
+      strToBytes(`<< /Length ${contentBytes.length} >>\nstream\n`),
+      contentBytes,
+      strToBytes('\nendstream'),
+    ]);
+    pushObject(imageNum(i), [
+      strToBytes(
+        `<< /Type /XObject /Subtype /Image /Width ${imgW} /Height ${imgH} /ColorSpace ${colorSpace} ` +
+          `/BitsPerComponent 8 /Filter /DCTDecode /Length ${jpegBytes.length} >>\nstream\n`
+      ),
+      jpegBytes,
+      strToBytes('\nendstream'),
+    ]);
+  }
+
+  pushObject(fontNum, [strToBytes('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>')]);
 
   const xrefStart = currentOffset;
-  const numObjects = 7;
   let xref = `xref\n0 ${numObjects}\n0000000000 65535 f \n`;
   for (let i = 1; i < numObjects; i++) {
     xref += `${String(offsets[i]).padStart(10, '0')} 00000 n \n`;
@@ -349,6 +365,9 @@ async function uploadInChunks(accessToken, path, encodedPath, bytes) {
 const ALLOWED_ORIGIN = '*';
 const MAX_FILE_BYTES = 15 * 1024 * 1024;
 const ALLOWED_MIME = /^image\/jpe?g$/;
+const PDF_MIME = /^application\/pdf$/;
+const MAX_PAGES = 10;
+const MAX_MULTI_PAGE_TOTAL_BYTES = 14 * 1024 * 1024;
 
 function corsHeaders() {
   return {
@@ -374,9 +393,17 @@ function sanitizeForFilename(text, maxLen = 40) {
     .slice(0, maxLen) || 'Unbekannt';
 }
 
-async function analyzeWithGemini(env, base64Image) {
-  const prompt =
-    'Du analysierst das Foto eines Papierdokuments (Rechnung, Beleg, Notarschreiben o.ae.). ' +
+function buildAnalysisPrompt(parts) {
+  const isPdf = parts.length === 1 && parts[0].mimeType === 'application/pdf';
+  const isMultiPage = parts.length > 1;
+  const docDescription = isPdf
+    ? 'das vollstaendige PDF-Dokument'
+    : isMultiPage
+      ? `${parts.length} Fotos, die zusammen die Seiten EINES Dokuments in der richtigen Reihenfolge zeigen`
+      : 'das Foto eines Papierdokuments';
+
+  return (
+    `Du analysierst ${docDescription} (Rechnung, Beleg, Notarschreiben o.ae.). ` +
     'Antworte ausschliesslich mit einem JSON-Objekt (keine Markdown-Codeblocks, kein Fliesstext) ' +
     'mit genau diesen Feldern:\n' +
     '{\n' +
@@ -384,10 +411,15 @@ async function analyzeWithGemini(env, base64Image) {
     '  "datum": string,        // Format YYYY-MM-DD, falls erkennbar, sonst leer\n' +
     '  "betrag": string,       // Betrag inkl. Waehrung, falls vorhanden, sonst leer\n' +
     '  "kategorie": string,    // GENAU einer dieser Werte: ' + CATEGORIES.join(', ') + '\n' +
-    '  "volltext": string      // kompletter erkannter Text auf dem Dokument, fuer Volltextsuche\n' +
+    '  "volltext": string      // kompletter erkannter Text ueber das gesamte Dokument (alle Seiten), fuer Volltextsuche\n' +
     '}\n' +
     'Waehle "kategorie" so genau wie moeglich passend zur Liste. Wenn du unsicher bist, nutze "' +
-    FALLBACK_CATEGORY + '".';
+    FALLBACK_CATEGORY + '".'
+  );
+}
+
+async function analyzeWithGemini(env, parts) {
+  const prompt = buildAnalysisPrompt(parts);
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${env.GEMINI_API_KEY}`;
   const res = await fetch(url, {
@@ -397,7 +429,7 @@ async function analyzeWithGemini(env, base64Image) {
       contents: [
         {
           parts: [
-            { inline_data: { mime_type: 'image/jpeg', data: base64Image } },
+            ...parts.map((p) => ({ inline_data: { mime_type: p.mimeType, data: p.base64 } })),
             { text: prompt },
           ],
         },
@@ -443,23 +475,44 @@ export default {
 
     try {
       const form = await request.formData();
-      const file = form.get('photo');
-      if (!file || typeof file === 'string') {
-        return jsonResponse({ ok: false, error: 'Kein Foto in der Anfrage gefunden (Feld "photo").' }, 400);
+      const files = form.getAll('photo').filter((f) => f && typeof f !== 'string');
+      if (files.length === 0) {
+        return jsonResponse({ ok: false, error: 'Kein Foto/Dokument in der Anfrage gefunden (Feld "photo").' }, 400);
       }
-      if (!ALLOWED_MIME.test(file.type || '')) {
-        return jsonResponse({ ok: false, error: 'Nur JPEG-Fotos werden unterstuetzt.' }, 400);
-      }
-      if (file.size > MAX_FILE_BYTES) {
-        return jsonResponse({ ok: false, error: 'Foto zu gross (max. 15 MB).' }, 400);
+      for (const file of files) {
+        if (file.size > MAX_FILE_BYTES) {
+          return jsonResponse({ ok: false, error: `Datei zu gross (max. 15 MB): ${file.name || 'unbenannt'}` }, 400);
+        }
       }
 
-      const jpegBytes = new Uint8Array(await file.arrayBuffer());
-      const base64Image = bytesToBase64(jpegBytes);
+      const isPdfImport = files.length === 1 && PDF_MIME.test(files[0].type || '');
+      const allJpeg = files.every((f) => ALLOWED_MIME.test(f.type || ''));
+      if (!isPdfImport && !allJpeg) {
+        return jsonResponse(
+          { ok: false, error: 'Nicht unterstuetzte Kombination von Dateitypen. Erlaubt: mehrere JPEG-Fotos (Seiten eines Belegs) ODER eine einzelne PDF-Datei.' },
+          400
+        );
+      }
+      if (!isPdfImport) {
+        if (files.length > MAX_PAGES) {
+          return jsonResponse({ ok: false, error: `Zu viele Seiten in einer Anfrage (max. ${MAX_PAGES}).` }, 400);
+        }
+        const totalBytes = files.reduce((sum, f) => sum + f.size, 0);
+        if (totalBytes > MAX_MULTI_PAGE_TOTAL_BYTES) {
+          return jsonResponse(
+            { ok: false, error: 'Foto-Serie zu gross fuer eine gemeinsame Analyse (max. ca. 14 MB insgesamt) - bitte einzeln scannen oder Fotos komprimieren.' },
+            400
+          );
+        }
+      }
 
-      const analysis = await analyzeWithGemini(env, base64Image);
+      const byteArrays = await Promise.all(files.map(async (f) => new Uint8Array(await f.arrayBuffer())));
+      const mimeType = isPdfImport ? 'application/pdf' : 'image/jpeg';
+      const parts = byteArrays.map((bytes) => ({ mimeType, base64: bytesToBase64(bytes) }));
 
-      const pdfBytes = buildSearchablePdf(jpegBytes, analysis.volltext || '');
+      const analysis = await analyzeWithGemini(env, parts);
+
+      const pdfBytes = isPdfImport ? byteArrays[0] : buildSearchablePdf(byteArrays, analysis.volltext || '');
 
       const datum = /^\d{4}-\d{2}-\d{2}$/.test(analysis.datum || '')
         ? analysis.datum

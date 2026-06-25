@@ -50,6 +50,21 @@
   .success-box { display: none; }
   .success-box .big { font-size: 2.4rem; text-align: center; margin-bottom: 8px; }
   .spinner { display: none; text-align: center; padding: 20px 0; color: var(--muted); }
+
+  .multi-toggle { display: flex; align-items: center; gap: 8px; font-size: 0.9rem; margin-bottom: 14px; cursor: pointer; }
+  .multi-toggle input { width: 18px; height: 18px; }
+  .camera-label.disabled { opacity: 0.5; pointer-events: none; }
+
+  .thumb-strip { display: none; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+  .thumb-item { position: relative; width: 72px; height: 72px; border-radius: 8px; overflow: hidden; border: 1px solid var(--border); }
+  .thumb-item img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .thumb-page-num { position: absolute; bottom: 2px; left: 4px; background: rgba(0,0,0,0.6); color: white; font-size: 0.7rem; padding: 1px 5px; border-radius: 6px; }
+  .thumb-remove { position: absolute; top: 2px; right: 2px; width: 20px; height: 20px; border: none; border-radius: 50%; background: rgba(0,0,0,0.65); color: white; font-size: 0.75rem; cursor: pointer; line-height: 1; }
+
+  .import-list { margin-top: 14px; display: flex; flex-direction: column; gap: 8px; }
+  .import-row { display: flex; align-items: center; gap: 8px; padding: 8px 10px; background: var(--gray); border-radius: 8px; font-size: 0.85rem; }
+  .import-name { font-weight: 600; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 40%; }
+  .import-detail { color: var(--muted); flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 </style>
 </head>
 <body>
@@ -62,15 +77,33 @@
   <div class="card" id="formCard">
     <h2>📸 Foto aufnehmen</h2>
     <p class="hint">Mach ein Foto vom Beleg, der Rechnung oder dem Schreiben. Die KI erkennt automatisch Inhalt, Kategorie und Datum.</p>
-    <label class="camera-label" for="photoInput">
+
+    <label class="multi-toggle">
+      <input type="checkbox" id="multiPageCheckbox" onchange="handleMultiPageToggle(event)" />
+      📑 Dieser Beleg hat mehrere Seiten
+    </label>
+
+    <label class="camera-label" for="photoInput" id="cameraLabel">
       <span class="big-icon">📷</span>
       <span id="cameraLabelText">Foto aufnehmen</span>
     </label>
     <input type="file" id="photoInput" accept="image/jpeg" capture="environment" style="display:none" onchange="handlePhotoSelect(event)" />
     <img class="preview-thumb" id="previewThumb" alt="Vorschau" />
+    <div class="thumb-strip" id="thumbStrip"></div>
     <div style="margin-top:16px">
       <button class="btn btn-green" id="submitBtn" onclick="submitPhoto()" disabled>✅ Analysieren & ablegen</button>
     </div>
+  </div>
+
+  <div class="card" id="importCard">
+    <h2>📁 Bereits digitale PDF-Rechnungen importieren</h2>
+    <p class="hint">Wähle eine oder mehrere PDF-Dateien (z.B. Rechnungen aus Online-Käufen) - jede Datei wird einzeln analysiert und automatisch eingeordnet.</p>
+    <label class="camera-label" for="importInput" id="importLabel">
+      <span class="big-icon">📁</span>
+      <span>PDF-Dateien auswählen</span>
+    </label>
+    <input type="file" id="importInput" accept="application/pdf" multiple style="display:none" onchange="handleImportSelect(event)" />
+    <div class="import-list" id="importList"></div>
   </div>
 
   <div class="spinner" id="spinner">⏳ Foto wird analysiert und abgelegt…</div>
@@ -90,29 +123,91 @@
   // analysieren und legt das Ergebnis als durchsuchbares PDF in OneDrive ab.
   // Siehe worker.js im Repo.
   const WORKER_URL = 'https://beleg-scanner.michel-brunner.workers.dev/';
+  const MAX_PAGES = 10; // Spiegelbild der Server-Grenze in worker.js (MAX_PAGES)
 
-  let selectedFile = null;
+  let multiPageMode = false;
+  let capturedPages = []; // File[] - bei Einzelfoto-Modus max. 1 Eintrag
+
+  function handleMultiPageToggle(e) {
+    multiPageMode = e.target.checked;
+    document.getElementById('cameraLabelText').textContent = multiPageMode ? 'Seite hinzufügen' : 'Foto aufnehmen';
+    resetCapture();
+  }
 
   function handlePhotoSelect(e) {
     const file = e.target.files[0];
+    e.target.value = ''; // erlaubt erneutes Aufnehmen ueber die Kamera (liefert ohnehin eine neue Datei)
     if (!file) return;
-    selectedFile = file;
-    document.getElementById('cameraLabelText').textContent = file.name;
-    const thumb = document.getElementById('previewThumb');
-    thumb.src = URL.createObjectURL(file);
-    thumb.style.display = 'block';
-    document.getElementById('submitBtn').disabled = false;
+
+    if (multiPageMode) {
+      if (capturedPages.length >= MAX_PAGES) {
+        return toast(`Maximal ${MAX_PAGES} Seiten pro Beleg.`);
+      }
+      capturedPages.push(file);
+    } else {
+      capturedPages = [file];
+    }
+    renderThumbStrip();
+    updateSubmitState();
+  }
+
+  function removePage(index) {
+    capturedPages.splice(index, 1);
+    renderThumbStrip();
+    updateSubmitState();
+  }
+
+  function renderThumbStrip() {
+    const strip = document.getElementById('thumbStrip');
+    const previewThumb = document.getElementById('previewThumb');
+
+    if (!multiPageMode) {
+      strip.style.display = 'none';
+      strip.innerHTML = '';
+      if (capturedPages[0]) {
+        previewThumb.src = URL.createObjectURL(capturedPages[0]);
+        previewThumb.style.display = 'block';
+      } else {
+        previewThumb.style.display = 'none';
+      }
+      return;
+    }
+
+    previewThumb.style.display = 'none';
+    strip.style.display = capturedPages.length ? 'flex' : 'none';
+    strip.innerHTML = capturedPages.map((file, i) => `
+      <div class="thumb-item">
+        <img src="${URL.createObjectURL(file)}" alt="Seite ${i + 1}" />
+        <span class="thumb-page-num">${i + 1}</span>
+        <button class="thumb-remove" onclick="removePage(${i})" aria-label="Seite entfernen">✕</button>
+      </div>
+    `).join('');
+  }
+
+  function updateSubmitState() {
+    const btn = document.getElementById('submitBtn');
+    btn.disabled = capturedPages.length === 0;
+    btn.textContent = multiPageMode && capturedPages.length > 1
+      ? `✅ Alle ${capturedPages.length} Seiten analysieren & ablegen`
+      : '✅ Analysieren & ablegen';
+  }
+
+  function resetCapture() {
+    capturedPages = [];
+    document.getElementById('photoInput').value = '';
+    renderThumbStrip();
+    updateSubmitState();
   }
 
   async function submitPhoto() {
-    if (!selectedFile) return toast('Bitte zuerst ein Foto aufnehmen.');
+    if (capturedPages.length === 0) return toast('Bitte zuerst ein Foto aufnehmen.');
 
     document.getElementById('formCard').style.display = 'none';
     document.getElementById('spinner').style.display = 'block';
 
     try {
       const form = new FormData();
-      form.append('photo', selectedFile);
+      for (const file of capturedPages) form.append('photo', file);
 
       const res = await fetch(WORKER_URL, { method: 'POST', body: form });
       const result = await res.json().catch(() => ({}));
@@ -125,6 +220,58 @@
     } finally {
       document.getElementById('spinner').style.display = 'none';
     }
+  }
+
+  async function handleImportSelect(e) {
+    const files = Array.from(e.target.files || []);
+    e.target.value = '';
+    if (files.length === 0) return;
+
+    const importLabel = document.getElementById('importLabel');
+    importLabel.classList.add('disabled');
+
+    const rows = files.map((file) => ({ file, status: 'pending' }));
+    renderImportList(rows);
+
+    // Sequentiell statt parallel, damit Gemini/Worker nicht ueberlastet werden
+    // und der Nutzer klares Pro-Datei-Feedback bekommt.
+    for (let i = 0; i < rows.length; i++) {
+      rows[i].status = 'processing';
+      renderImportList(rows);
+      try {
+        const form = new FormData();
+        form.append('photo', rows[i].file);
+        const res = await fetch(WORKER_URL, { method: 'POST', body: form });
+        const result = await res.json().catch(() => ({}));
+        if (!res.ok || !result.ok) throw new Error(result.error || `Server-Fehler (${res.status})`);
+        rows[i].status = 'done';
+        rows[i].result = result;
+      } catch (err) {
+        rows[i].status = 'error';
+        rows[i].error = err.message;
+      }
+      renderImportList(rows);
+    }
+
+    importLabel.classList.remove('disabled');
+  }
+
+  function renderImportList(rows) {
+    const list = document.getElementById('importList');
+    list.innerHTML = rows.map((r) => {
+      const icon = r.status === 'pending' ? '⏳' : r.status === 'processing' ? '🔄' : r.status === 'done' ? '✅' : '❌';
+      const detail = r.status === 'done' ? r.result.pfad
+        : r.status === 'error' ? r.error
+        : r.status === 'processing' ? 'wird verarbeitet…'
+        : 'wartet…';
+      return `
+        <div class="import-row">
+          <span>${icon}</span>
+          <span class="import-name">${escapeHtml(r.file.name)}</span>
+          <span class="import-detail">${escapeHtml(detail)}</span>
+        </div>
+      `;
+    }).join('');
   }
 
   function showResult(result) {
@@ -150,11 +297,7 @@
   }
 
   function resetForm() {
-    selectedFile = null;
-    document.getElementById('photoInput').value = '';
-    document.getElementById('cameraLabelText').textContent = 'Foto aufnehmen';
-    document.getElementById('previewThumb').style.display = 'none';
-    document.getElementById('submitBtn').disabled = true;
+    resetCapture();
     document.getElementById('successBox').style.display = 'none';
     document.getElementById('formCard').style.display = 'block';
   }
