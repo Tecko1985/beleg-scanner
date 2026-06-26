@@ -403,16 +403,10 @@ async function findFolderByPath(accessToken, segments) {
   return parentId;
 }
 
-function buildSearchClause(q) {
-  if (!q) return '';
-  const escaped = escapeForQuery(q);
-  return ` and (fullText contains '${escaped}' or name contains '${escaped}')`;
-}
-
-async function queryDrive(accessToken, q) {
+async function queryDrive(accessToken, q, pageSize = 100) {
   // Drive verbietet orderBy bei fullText-Queries (Ergebnisse sind dann immer nach Relevanz sortiert).
   const orderBy = q.includes('fullText') ? '' : '&orderBy=createdTime desc';
-  const url = `${DRIVE_BASE}/files?q=${encodeURIComponent(q)}&fields=files(id,name,createdTime,webViewLink,parents)&pageSize=50${orderBy}`;
+  const url = `${DRIVE_BASE}/files?q=${encodeURIComponent(q)}&fields=files(id,name,createdTime,webViewLink,parents)&pageSize=${pageSize}${orderBy}`;
   const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
   if (!res.ok) {
     const detail = await res.text().catch(() => '');
@@ -420,6 +414,28 @@ async function queryDrive(accessToken, q) {
   }
   const data = await res.json();
   return data.files ?? [];
+}
+
+// Sucht innerhalb von scopeQ (Ordner-/Trash-/Mimetype-Bedingungen ohne Textfilter) nach q.
+// Kombiniert zwei Strategien, weil Drive's eigene Operatoren keine echte Teilstring-Suche
+// im Dateinamen bieten: "name contains 'x'" matched nur GANZE Tokens (z.B. findet "wiese"
+// nicht "Wiesemann"). Deshalb zusaetzlich client-seitig per String.includes() auf den
+// Dateinamen aller Kandidaten im Scope filtern und mit den Drive-fullText-Treffern
+// (deckt den erkannten Dokument-Inhalt ab) ueber die Datei-ID zusammenfuehren.
+async function searchWithinScope(accessToken, scopeQ, q) {
+  if (!q) return queryDrive(accessToken, scopeQ);
+
+  const escaped = escapeForQuery(q);
+  const [fullTextHits, allInScope] = await Promise.all([
+    queryDrive(accessToken, `${scopeQ} and fullText contains '${escaped}'`),
+    queryDrive(accessToken, scopeQ, 200),
+  ]);
+  const needle = q.toLowerCase();
+  const nameHits = allInScope.filter((f) => f.name.toLowerCase().includes(needle));
+
+  const byId = new Map();
+  for (const f of [...fullTextHits, ...nameHits]) byId.set(f.id, f);
+  return Array.from(byId.values());
 }
 
 async function getFolderName(accessToken, folderId) {
@@ -443,7 +459,7 @@ async function resolveCategoryPath(accessToken, yearFolder) {
 }
 
 async function filterByResolvedPath(accessToken, files, kategorie, jahr) {
-  const limited = files.slice(0, 50);
+  const limited = files.slice(0, 200);
   const results = [];
   for (const file of limited) {
     const yearFolderId = file.parents?.[0];
@@ -470,13 +486,13 @@ async function searchDocuments(env, { q, kategorie, jahr }) {
     const segments = [...kategorie.split('/'), String(jahr)];
     const folderId = await findFolderByPath(accessToken, segments);
     if (!folderId) return [];
-    const q2 = `'${folderId}' in parents and trashed=false and mimeType='application/pdf'${buildSearchClause(q)}`;
-    const files = await queryDrive(accessToken, q2);
+    const scopeQ = `'${folderId}' in parents and trashed=false and mimeType='application/pdf'`;
+    const files = await searchWithinScope(accessToken, scopeQ, q);
     return files.map((f) => toResult(f, String(jahr), kategorie));
   }
 
-  const broadQ = `trashed=false and mimeType='application/pdf'${buildSearchClause(q)}`;
-  const candidates = await queryDrive(accessToken, broadQ);
+  const broadScopeQ = `trashed=false and mimeType='application/pdf'`;
+  const candidates = await searchWithinScope(accessToken, broadScopeQ, q);
   if (!kategorie && !jahr) return candidates.map((f) => toResult(f, '', ''));
   return filterByResolvedPath(accessToken, candidates, kategorie, jahr);
 }
