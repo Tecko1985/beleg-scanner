@@ -446,11 +446,13 @@ async function getFolderName(accessToken, folderId) {
   return res.json();
 }
 
-async function resolveCategoryPath(accessToken, yearFolder) {
+// getFolder: memoisierter Lookup (folderId -> {name, parents}), damit derselbe
+// Eltern-Ordner nicht pro Datei erneut abgefragt wird.
+async function resolveCategoryPath(getFolder, yearFolder) {
   const segments = [];
   let current = yearFolder;
   while (current?.parents?.[0]) {
-    const parent = await getFolderName(accessToken, current.parents[0]);
+    const parent = await getFolder(current.parents[0]);
     if (!parent || parent.name === ROOT_FOLDER) break;
     segments.unshift(parent.name);
     current = parent;
@@ -460,15 +462,26 @@ async function resolveCategoryPath(accessToken, yearFolder) {
 
 async function filterByResolvedPath(accessToken, files, kategorie, jahr) {
   const limited = files.slice(0, 200);
+  // Ordnernamen ueber alle Treffer hinweg cachen: viele Dateien teilen sich denselben
+  // Jahres- und Kategorie-Ordner. Ohne Cache entstuenden ~4 API-Calls pro Datei und das
+  // Subrequest-Limit des Workers (Free-Tier: 50/Request) waere bei ~12 Treffern erreicht.
+  const folderCache = new Map();
+  const getFolder = async (id) => {
+    if (folderCache.has(id)) return folderCache.get(id);
+    const folder = await getFolderName(accessToken, id);
+    folderCache.set(id, folder);
+    return folder;
+  };
+
   const results = [];
   for (const file of limited) {
     const yearFolderId = file.parents?.[0];
     if (!yearFolderId) continue;
-    const yearFolder = await getFolderName(accessToken, yearFolderId);
+    const yearFolder = await getFolder(yearFolderId);
     if (!yearFolder) continue;
     if (jahr && yearFolder.name !== String(jahr)) continue;
 
-    const categoryPath = await resolveCategoryPath(accessToken, yearFolder);
+    const categoryPath = await resolveCategoryPath(getFolder, yearFolder);
     if (kategorie && categoryPath !== kategorie) continue;
     results.push(toResult(file, yearFolder.name, categoryPath));
   }
