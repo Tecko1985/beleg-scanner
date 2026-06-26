@@ -1,21 +1,21 @@
 // Cloudflare Worker: nimmt ein Beleg-Foto vom Handy entgegen, laesst es von
 // Google Gemini (kostenloser Tier) analysieren (Text + Kategorie), baut daraus
-// ein durchsuchbares PDF und legt es im passenden Kategorie-Ordner in OneDrive ab.
+// ein durchsuchbares PDF und legt es im passenden Kategorie-Ordner in Google Drive ab.
 //
 // Deploy: Cloudflare Dashboard -> Workers & Pages -> Worker erstellen -> Code
 // dieser Datei einfuegen. Da dieser Worker mehrere Module importiert
-// (categories.js, pdf.js, storage/onedrive.js), entweder im Dashboard-Editor
+// (categories.js, pdf.js, storage/google-drive.js), entweder im Dashboard-Editor
 // als zusaetzliche Dateien anlegen (Module-Worker-Format unterstuetzt das),
 // oder falls das in eurer Dashboard-Version nicht geht: Inhalte der drei
 // Dateien manuell in dieses Script einfuegen und die import/export-Zeilen
 // entfernen.
 //
 // Benoetigte Secrets (Cloudflare Dashboard -> Settings -> Variables):
-//   GEMINI_API_KEY, MS_CLIENT_ID, MS_CLIENT_SECRET, MS_REFRESH_TOKEN
+//   GEMINI_API_KEY, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN, SEARCH_PASSWORD
 
 import { CATEGORIES, FALLBACK_CATEGORY, isValidCategory } from './categories.js';
 import { buildSearchablePdf } from './pdf.js';
-import { uploadDocument } from './storage/onedrive.js';
+import { uploadDocument, searchDocuments } from './storage/google-drive.js';
 
 const ALLOWED_ORIGIN = '*'; // Anpassen, sobald die Scan-Seite ein festes Hosting hat (siehe README)
 const MAX_FILE_BYTES = 15 * 1024 * 1024; // 15 MB pro Einzeldatei (Foto oder PDF)
@@ -29,8 +29,8 @@ const MAX_MULTI_PAGE_TOTAL_BYTES = 14 * 1024 * 1024;
 function corsHeaders() {
   return {
     'Access-Control-Allow-Origin': ALLOWED_ORIGIN,
-    'Access-Control-Allow-Methods': 'POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, X-Search-Password',
   };
 }
 
@@ -67,13 +67,14 @@ function buildAnalysisPrompt(parts) {
     'mit genau diesen Feldern:\n' +
     '{\n' +
     '  "aussteller": string,   // Firma/Person, die das Dokument ausgestellt hat\n' +
+    '  "grund": string,        // KURZE (2-5 Woerter) Zusammenfassung, WORUM es inhaltlich geht, z.B. "Stromrechnung Jahresabrechnung", "Kfz-Versicherung Beitrag", "Laptop-Kauf" - nicht identisch mit aussteller\n' +
     '  "datum": string,        // Format YYYY-MM-DD, falls erkennbar, sonst leer\n' +
     '  "betrag": string,       // Betrag inkl. Waehrung, falls vorhanden, sonst leer\n' +
     '  "kategorie": string,    // GENAU einer dieser Werte: ' + CATEGORIES.join(', ') + '\n' +
     '  "volltext": string      // kompletter erkannter Text ueber das gesamte Dokument (alle Seiten), fuer Volltextsuche\n' +
     '}\n' +
     'Waehle "kategorie" so genau wie moeglich passend zur Liste. Wenn du unsicher bist, nutze "' +
-    FALLBACK_CATEGORY + '".'
+    FALLBACK_CATEGORY + '". "grund" soll kurz und eindeutig den Zweck des Dokuments beschreiben, nicht den Aussteller wiederholen.'
   );
 }
 
@@ -123,10 +124,34 @@ function bytesToBase64(bytes) {
   return btoa(binary);
 }
 
+// Schuetzt nur die Suche (liest bestehende Belege) - der Upload-Endpunkt bleibt bewusst offen.
+async function handleSearch(request, env, url) {
+  const password = request.headers.get('X-Search-Password') || url.searchParams.get('password') || '';
+  if (!env.SEARCH_PASSWORD || password !== env.SEARCH_PASSWORD) {
+    return jsonResponse({ ok: false, error: 'Falsches oder fehlendes Passwort.' }, 401);
+  }
+
+  try {
+    const results = await searchDocuments(env, {
+      q: url.searchParams.get('q') || '',
+      kategorie: url.searchParams.get('kategorie') || '',
+      jahr: url.searchParams.get('jahr') || '',
+    });
+    return jsonResponse({ ok: true, results });
+  } catch (err) {
+    return jsonResponse({ ok: false, error: err.message }, 500);
+  }
+}
+
 export default {
   async fetch(request, env) {
     if (request.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: corsHeaders() });
+    }
+
+    const url = new URL(request.url);
+    if (request.method === 'GET' && url.pathname === '/search') {
+      return handleSearch(request, env, url);
     }
     if (request.method !== 'POST') {
       return new Response('Method not allowed', { status: 405, headers: corsHeaders() });
@@ -181,13 +206,14 @@ export default {
         ? analysis.datum
         : new Date().toISOString().slice(0, 10);
       const aussteller = sanitizeForFilename(analysis.aussteller);
-      const betrag = sanitizeForFilename(analysis.betrag, 15);
-      const filename = `${datum}_${aussteller}${betrag !== 'Unbekannt' ? '_' + betrag : ''}.pdf`;
+      const grund = sanitizeForFilename(analysis.grund, 50);
+      const filename = `${datum}_${aussteller}_${grund}.pdf`;
 
       const uploadResult = await uploadDocument(env, {
         category: analysis.kategorie,
         filename,
         bytes: pdfBytes,
+        year: datum.slice(0, 4),
       });
 
       return jsonResponse({

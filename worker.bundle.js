@@ -1,13 +1,13 @@
 // ===========================================================================
 // DEPLOY-FERTIGE EINZELDATEI fuer Cloudflare Workers (Dashboard Quick-Edit).
-// Enthaelt zusammengefuehrt: categories.js + pdf.js + storage/onedrive.js +
+// Enthaelt zusammengefuehrt: categories.js + pdf.js + storage/google-drive.js +
 // worker.js. Die einzelnen Quelldateien im Repo sind die "Wahrheit" fuer
 // Weiterentwicklung - diese Datei wird daraus von Hand zusammengefuehrt und
 // 1:1 in den Cloudflare-Worker-Editor eingefuegt (kein Build-Schritt, kein
 // Node noetig).
 //
 // Benoetigte Secrets (Cloudflare Dashboard -> Settings -> Variables and Secrets):
-//   GEMINI_API_KEY, MS_CLIENT_ID, MS_CLIENT_SECRET, MS_REFRESH_TOKEN
+//   GEMINI_API_KEY, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN, SEARCH_PASSWORD
 // ===========================================================================
 
 // --- categories.js ---------------------------------------------------------
@@ -266,22 +266,20 @@ function buildSearchablePdf(images, fullText) {
   return concatBytes(parts);
 }
 
-// --- storage/onedrive.js ----------------------------------------------------
+// --- storage/google-drive.js -------------------------------------------------
 
-const TOKEN_URL = 'https://login.microsoftonline.com/common/oauth2/v2.0/token';
-const GRAPH_BASE = 'https://graph.microsoft.com/v1.0';
+const TOKEN_URL = 'https://oauth2.googleapis.com/token';
+const DRIVE_BASE = 'https://www.googleapis.com/drive/v3';
+const DRIVE_UPLOAD_BASE = 'https://www.googleapis.com/upload/drive/v3';
 // Nicht "Belege" nennen: kollidiert mit der gleichnamigen Kategorie "Belege/Sonstiges".
 const ROOT_FOLDER = 'Beleg-Scanner';
-const SIMPLE_UPLOAD_LIMIT = 4 * 1024 * 1024;
-const UPLOAD_CHUNK_SIZE = 10 * 1024 * 1024;
 
 async function getAccessToken(env) {
   const body = new URLSearchParams({
-    client_id: env.MS_CLIENT_ID,
-    client_secret: env.MS_CLIENT_SECRET,
-    refresh_token: env.MS_REFRESH_TOKEN,
+    client_id: env.GOOGLE_CLIENT_ID,
+    client_secret: env.GOOGLE_CLIENT_SECRET,
+    refresh_token: env.GOOGLE_REFRESH_TOKEN,
     grant_type: 'refresh_token',
-    scope: 'Files.ReadWrite offline_access',
   });
   const res = await fetch(TOKEN_URL, {
     method: 'POST',
@@ -290,74 +288,197 @@ async function getAccessToken(env) {
   });
   if (!res.ok) {
     const detail = await res.text().catch(() => '');
-    throw new Error(`Microsoft-Token-Refresh fehlgeschlagen (${res.status}): ${detail}`);
+    throw new Error(`Google-Token-Refresh fehlgeschlagen (${res.status}): ${detail}`);
   }
   const data = await res.json();
   return data.access_token;
 }
 
-async function uploadDocument(env, { category, filename, bytes }) {
-  const accessToken = await getAccessToken(env);
-  const path = `${ROOT_FOLDER}/${category}/${filename}`;
-  const encodedPath = path.split('/').map(encodeURIComponent).join('/');
-
-  if (bytes.length <= SIMPLE_UPLOAD_LIMIT) {
-    return uploadSimple(accessToken, path, encodedPath, bytes);
-  }
-  // Microsoft Graph verlangt fuer Dateien >4MB eine Upload-Session statt PUT .../content
-  return uploadInChunks(accessToken, path, encodedPath, bytes);
+function escapeForQuery(name) {
+  return name.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 }
 
-async function uploadSimple(accessToken, path, encodedPath, bytes) {
-  const res = await fetch(`${GRAPH_BASE}/me/drive/root:/${encodedPath}:/content`, {
+async function findChild(accessToken, name, parentId, mimeTypeFilter) {
+  const q = [
+    `name='${escapeForQuery(name)}'`,
+    `'${parentId}' in parents`,
+    'trashed=false',
+    mimeTypeFilter,
+  ].join(' and ');
+  const url = `${DRIVE_BASE}/files?q=${encodeURIComponent(q)}&fields=files(id)&pageSize=1`;
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '');
+    throw new Error(`Google-Drive-Suche fehlgeschlagen (${res.status}) fuer ${name}: ${detail}`);
+  }
+  const data = await res.json();
+  return data.files?.[0]?.id ?? null;
+}
+
+async function ensureFolder(accessToken, name, parentId) {
+  const existing = await findChild(accessToken, name, parentId, "mimeType='application/vnd.google-apps.folder'");
+  if (existing) return existing;
+
+  const res = await fetch(`${DRIVE_BASE}/files?fields=id`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, mimeType: 'application/vnd.google-apps.folder', parents: [parentId] }),
+  });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '');
+    throw new Error(`Google-Drive-Ordner-Erstellung fehlgeschlagen (${res.status}) fuer ${name}: ${detail}`);
+  }
+  const data = await res.json();
+  return data.id;
+}
+
+async function startResumableSession(accessToken, { filename, parentId, existingFileId, totalBytes, mimeType }) {
+  const headers = {
+    Authorization: `Bearer ${accessToken}`,
+    'Content-Type': 'application/json; charset=UTF-8',
+    'X-Upload-Content-Type': mimeType,
+    'X-Upload-Content-Length': String(totalBytes),
+  };
+
+  const url = existingFileId
+    ? `${DRIVE_UPLOAD_BASE}/files/${existingFileId}?uploadType=resumable&fields=id,webViewLink`
+    : `${DRIVE_UPLOAD_BASE}/files?uploadType=resumable&fields=id,webViewLink`;
+  const body = existingFileId ? JSON.stringify({}) : JSON.stringify({ name: filename, parents: [parentId] });
+
+  const res = await fetch(url, { method: existingFileId ? 'PATCH' : 'POST', headers, body });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '');
+    throw new Error(`Google-Drive-Upload-Session fehlgeschlagen (${res.status}) fuer ${filename}: ${detail}`);
+  }
+  const sessionUrl = res.headers.get('Location');
+  if (!sessionUrl) throw new Error(`Google-Drive-Upload-Session ohne Location-Header fuer ${filename}`);
+  return sessionUrl;
+}
+
+async function putContent(sessionUrl, bytes, mimeType) {
+  const res = await fetch(sessionUrl, {
     method: 'PUT',
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      'Content-Type': 'application/pdf',
-    },
+    headers: { 'Content-Type': mimeType, 'Content-Length': String(bytes.length) },
     body: bytes,
   });
   if (!res.ok) {
     const detail = await res.text().catch(() => '');
-    throw new Error(`OneDrive-Upload fehlgeschlagen (${res.status}) fuer ${path}: ${detail}`);
+    throw new Error(`Google-Drive-Upload fehlgeschlagen (${res.status}): ${detail}`);
   }
-  const data = await res.json();
-  return { path, webUrl: data.webUrl };
+  return res.json();
 }
 
-async function uploadInChunks(accessToken, path, encodedPath, bytes) {
-  const sessionRes = await fetch(`${GRAPH_BASE}/me/drive/root:/${encodedPath}:/createUploadSession`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ item: { '@microsoft.graph.conflictBehavior': 'replace' } }),
-  });
-  if (!sessionRes.ok) {
-    const detail = await sessionRes.text().catch(() => '');
-    throw new Error(`OneDrive-Upload-Session fehlgeschlagen (${sessionRes.status}) fuer ${path}: ${detail}`);
+async function uploadDocument(env, { category, filename, bytes, year }) {
+  const accessToken = await getAccessToken(env);
+  let folderId = await ensureFolder(accessToken, ROOT_FOLDER, 'root');
+  // Kategorien wie "Rechnungen/Hardware-Rechner" sind verschachtelte Pfade -
+  // anders als OneDrive legt Drive Zwischenordner nicht automatisch an.
+  for (const segment of category.split('/')) {
+    folderId = await ensureFolder(accessToken, segment, folderId);
   }
-  const { uploadUrl } = await sessionRes.json();
+  folderId = await ensureFolder(accessToken, String(year), folderId); // Jahres-Ebene, innerster Ordner
+  const categoryId = folderId;
+  const existingFileId = await findChild(accessToken, filename, categoryId, "mimeType!='application/vnd.google-apps.folder'");
 
-  let offset = 0;
-  let lastData = null;
-  while (offset < bytes.length) {
-    const end = Math.min(offset + UPLOAD_CHUNK_SIZE, bytes.length);
-    const chunk = bytes.subarray(offset, end);
-    const res = await fetch(uploadUrl, {
-      method: 'PUT',
-      headers: {
-        'Content-Length': String(chunk.length),
-        'Content-Range': `bytes ${offset}-${end - 1}/${bytes.length}`,
-      },
-      body: chunk,
-    });
-    if (!res.ok) {
-      const detail = await res.text().catch(() => '');
-      throw new Error(`OneDrive-Upload (Chunk ${offset}-${end - 1}) fehlgeschlagen (${res.status}) fuer ${path}: ${detail}`);
-    }
-    if (end === bytes.length) lastData = await res.json();
-    offset = end;
+  const mimeType = 'application/pdf';
+  const sessionUrl = await startResumableSession(accessToken, {
+    filename,
+    parentId: categoryId,
+    existingFileId,
+    totalBytes: bytes.length,
+    mimeType,
+  });
+  const result = await putContent(sessionUrl, bytes, mimeType);
+
+  return { path: `${ROOT_FOLDER}/${category}/${year}/${filename}`, webUrl: result.webViewLink };
+}
+
+async function findFolderByPath(accessToken, segments) {
+  let parentId = await findChild(accessToken, ROOT_FOLDER, 'root', "mimeType='application/vnd.google-apps.folder'");
+  if (!parentId) return null;
+  for (const segment of segments) {
+    parentId = await findChild(accessToken, segment, parentId, "mimeType='application/vnd.google-apps.folder'");
+    if (!parentId) return null;
   }
-  return { path, webUrl: lastData?.webUrl };
+  return parentId;
+}
+
+function buildSearchClause(q) {
+  if (!q) return '';
+  const escaped = escapeForQuery(q);
+  return ` and (fullText contains '${escaped}' or name contains '${escaped}')`;
+}
+
+async function queryDrive(accessToken, q) {
+  // Drive verbietet orderBy bei fullText-Queries (Ergebnisse sind dann immer nach Relevanz sortiert).
+  const orderBy = q.includes('fullText') ? '' : '&orderBy=createdTime desc';
+  const url = `${DRIVE_BASE}/files?q=${encodeURIComponent(q)}&fields=files(id,name,createdTime,webViewLink,parents)&pageSize=50${orderBy}`;
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '');
+    throw new Error(`Google-Drive-Suche fehlgeschlagen (${res.status}): ${detail}`);
+  }
+  const data = await res.json();
+  return data.files ?? [];
+}
+
+async function getFolderName(accessToken, folderId) {
+  const res = await fetch(`${DRIVE_BASE}/files/${folderId}?fields=name,parents`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!res.ok) return null;
+  return res.json();
+}
+
+async function resolveCategoryPath(accessToken, yearFolder) {
+  const segments = [];
+  let current = yearFolder;
+  while (current?.parents?.[0]) {
+    const parent = await getFolderName(accessToken, current.parents[0]);
+    if (!parent || parent.name === ROOT_FOLDER) break;
+    segments.unshift(parent.name);
+    current = parent;
+  }
+  return segments.join('/');
+}
+
+async function filterByResolvedPath(accessToken, files, kategorie, jahr) {
+  const limited = files.slice(0, 50);
+  const results = [];
+  for (const file of limited) {
+    const yearFolderId = file.parents?.[0];
+    if (!yearFolderId) continue;
+    const yearFolder = await getFolderName(accessToken, yearFolderId);
+    if (!yearFolder) continue;
+    if (jahr && yearFolder.name !== String(jahr)) continue;
+
+    const categoryPath = await resolveCategoryPath(accessToken, yearFolder);
+    if (kategorie && categoryPath !== kategorie) continue;
+    results.push(toResult(file, yearFolder.name, categoryPath));
+  }
+  return results;
+}
+
+function toResult(file, year, kategorie) {
+  return { name: file.name, webUrl: file.webViewLink, createdTime: file.createdTime, jahr: year, kategorie: kategorie || '' };
+}
+
+async function searchDocuments(env, { q, kategorie, jahr }) {
+  const accessToken = await getAccessToken(env);
+
+  if (kategorie && jahr) {
+    const segments = [...kategorie.split('/'), String(jahr)];
+    const folderId = await findFolderByPath(accessToken, segments);
+    if (!folderId) return [];
+    const q2 = `'${folderId}' in parents and trashed=false and mimeType='application/pdf'${buildSearchClause(q)}`;
+    const files = await queryDrive(accessToken, q2);
+    return files.map((f) => toResult(f, String(jahr), kategorie));
+  }
+
+  const broadQ = `trashed=false and mimeType='application/pdf'${buildSearchClause(q)}`;
+  const candidates = await queryDrive(accessToken, broadQ);
+  if (!kategorie && !jahr) return candidates.map((f) => toResult(f, '', ''));
+  return filterByResolvedPath(accessToken, candidates, kategorie, jahr);
 }
 
 // --- worker.js ---------------------------------------------------------------
@@ -372,8 +493,8 @@ const MAX_MULTI_PAGE_TOTAL_BYTES = 14 * 1024 * 1024;
 function corsHeaders() {
   return {
     'Access-Control-Allow-Origin': ALLOWED_ORIGIN,
-    'Access-Control-Allow-Methods': 'POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, X-Search-Password',
   };
 }
 
@@ -408,13 +529,14 @@ function buildAnalysisPrompt(parts) {
     'mit genau diesen Feldern:\n' +
     '{\n' +
     '  "aussteller": string,   // Firma/Person, die das Dokument ausgestellt hat\n' +
+    '  "grund": string,        // KURZE (2-5 Woerter) Zusammenfassung, WORUM es inhaltlich geht, z.B. "Stromrechnung Jahresabrechnung", "Kfz-Versicherung Beitrag", "Laptop-Kauf" - nicht identisch mit aussteller\n' +
     '  "datum": string,        // Format YYYY-MM-DD, falls erkennbar, sonst leer\n' +
     '  "betrag": string,       // Betrag inkl. Waehrung, falls vorhanden, sonst leer\n' +
     '  "kategorie": string,    // GENAU einer dieser Werte: ' + CATEGORIES.join(', ') + '\n' +
     '  "volltext": string      // kompletter erkannter Text ueber das gesamte Dokument (alle Seiten), fuer Volltextsuche\n' +
     '}\n' +
     'Waehle "kategorie" so genau wie moeglich passend zur Liste. Wenn du unsicher bist, nutze "' +
-    FALLBACK_CATEGORY + '".'
+    FALLBACK_CATEGORY + '". "grund" soll kurz und eindeutig den Zweck des Dokuments beschreiben, nicht den Aussteller wiederholen.'
   );
 }
 
@@ -464,10 +586,33 @@ function bytesToBase64(bytes) {
   return btoa(binary);
 }
 
+async function handleSearch(request, env, url) {
+  const password = request.headers.get('X-Search-Password') || url.searchParams.get('password') || '';
+  if (!env.SEARCH_PASSWORD || password !== env.SEARCH_PASSWORD) {
+    return jsonResponse({ ok: false, error: 'Falsches oder fehlendes Passwort.' }, 401);
+  }
+
+  try {
+    const results = await searchDocuments(env, {
+      q: url.searchParams.get('q') || '',
+      kategorie: url.searchParams.get('kategorie') || '',
+      jahr: url.searchParams.get('jahr') || '',
+    });
+    return jsonResponse({ ok: true, results });
+  } catch (err) {
+    return jsonResponse({ ok: false, error: err.message }, 500);
+  }
+}
+
 export default {
   async fetch(request, env) {
     if (request.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: corsHeaders() });
+    }
+
+    const url = new URL(request.url);
+    if (request.method === 'GET' && url.pathname === '/search') {
+      return handleSearch(request, env, url);
     }
     if (request.method !== 'POST') {
       return new Response('Method not allowed', { status: 405, headers: corsHeaders() });
@@ -518,13 +663,14 @@ export default {
         ? analysis.datum
         : new Date().toISOString().slice(0, 10);
       const aussteller = sanitizeForFilename(analysis.aussteller);
-      const betrag = sanitizeForFilename(analysis.betrag, 15);
-      const filename = `${datum}_${aussteller}${betrag !== 'Unbekannt' ? '_' + betrag : ''}.pdf`;
+      const grund = sanitizeForFilename(analysis.grund, 50);
+      const filename = `${datum}_${aussteller}_${grund}.pdf`;
 
       const uploadResult = await uploadDocument(env, {
         category: analysis.kategorie,
         filename,
         bytes: pdfBytes,
+        year: datum.slice(0, 4),
       });
 
       return jsonResponse({
