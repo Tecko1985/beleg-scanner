@@ -30,6 +30,8 @@
   .btn:disabled { opacity: 0.6; cursor: not-allowed; }
   .btn-blue { background: var(--blue); color: white; }
   .btn-green { background: var(--green); color: white; }
+  input[type="password"] { width: 100%; padding: 12px 14px; border: 1px solid var(--border); border-radius: 8px; font-size: 1rem; margin-bottom: 12px; font-family: inherit; }
+  .error-text { color: #b3261e; font-size: 0.85rem; margin-bottom: 12px; display: none; }
   .camera-label {
     display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
     border: 2px dashed var(--blue); border-radius: var(--radius); padding: 36px 20px; cursor: pointer; color: var(--blue);
@@ -75,6 +77,15 @@
 </header>
 
 <main>
+  <div class="card" id="passwordCard" style="display:none">
+    <h2>🔒 Zugriff</h2>
+    <p class="hint">Bitte einmalig das Upload-Passwort eingeben. Es wird auf diesem Gerät gespeichert, damit du es nicht bei jedem Scan erneut brauchst.</p>
+    <div class="error-text" id="passwordError">Falsches Passwort.</div>
+    <input type="password" id="uploadPassword" placeholder="Passwort" onkeydown="if(event.key==='Enter')onPasswordSubmit()" />
+    <button class="btn btn-blue" onclick="onPasswordSubmit()">Weiter</button>
+  </div>
+
+  <div id="appContent" style="display:none">
   <div class="card" id="formCard">
     <h2>📸 Foto aufnehmen</h2>
     <p class="hint">Mach ein Foto vom Beleg, der Rechnung oder dem Schreiben. Die KI erkennt automatisch Inhalt, Kategorie und Datum.</p>
@@ -115,6 +126,7 @@
     <div id="resultDetails"></div>
     <button class="btn btn-blue" style="margin-top:16px" onclick="resetForm()">➕ Weiteren Beleg scannen</button>
   </div>
+  </div>
 </main>
 
 <div class="toast" id="toast"></div>
@@ -128,6 +140,29 @@
 
   let multiPageMode = false;
   let capturedPages = []; // File[] - bei Einzelfoto-Modus max. 1 Eintrag
+
+  // --- Upload-Passwortschutz -------------------------------------------------
+  // Schuetzt den ansonsten offenen Upload-Endpunkt. Persistent im localStorage
+  // (einmal pro Geraet eingeben) - anders als die Suche, die pro Tab-Session fragt.
+  function getUploadPassword() {
+    return localStorage.getItem('uploadPassword') || '';
+  }
+  function showApp() {
+    document.getElementById('passwordCard').style.display = 'none';
+    document.getElementById('appContent').style.display = 'block';
+    document.getElementById('formCard').style.display = 'block';
+  }
+  function showPasswordGate(isError) {
+    document.getElementById('appContent').style.display = 'none';
+    document.getElementById('passwordCard').style.display = 'block';
+    document.getElementById('passwordError').style.display = isError ? 'block' : 'none';
+  }
+  function onPasswordSubmit() {
+    const pw = document.getElementById('uploadPassword').value;
+    if (!pw) return;
+    localStorage.setItem('uploadPassword', pw);
+    showApp();
+  }
 
   function handleMultiPageToggle(e) {
     multiPageMode = e.target.checked;
@@ -210,7 +245,12 @@
       const form = new FormData();
       for (const file of capturedPages) form.append('photo', file);
 
-      const res = await fetch(WORKER_URL, { method: 'POST', body: form });
+      const res = await fetch(WORKER_URL, { method: 'POST', body: form, headers: { 'X-Upload-Password': getUploadPassword() } });
+      if (res.status === 401) {
+        localStorage.removeItem('uploadPassword');
+        showPasswordGate(true);
+        return;
+      }
       const result = await res.json().catch(() => ({}));
       if (!res.ok || !result.ok) throw new Error(result.error || `Server-Fehler (${res.status})`);
 
@@ -242,7 +282,13 @@
       try {
         const form = new FormData();
         form.append('photo', rows[i].file);
-        const res = await fetch(WORKER_URL, { method: 'POST', body: form });
+        const res = await fetch(WORKER_URL, { method: 'POST', body: form, headers: { 'X-Upload-Password': getUploadPassword() } });
+        if (res.status === 401) {
+          localStorage.removeItem('uploadPassword');
+          importLabel.classList.remove('disabled');
+          showPasswordGate(true);
+          return;
+        }
         const result = await res.json().catch(() => ({}));
         if (!res.ok || !result.ok) throw new Error(result.error || `Server-Fehler (${res.status})`);
         rows[i].status = 'done';
@@ -309,6 +355,9 @@
     t.classList.add('show');
     setTimeout(() => t.classList.remove('show'), 3500);
   }
+
+  // Initiales Gate: ohne gespeichertes Passwort erst die Passwort-Karte zeigen.
+  if (getUploadPassword()) showApp(); else showPasswordGate(false);
 </script>
 </body>
 </html>

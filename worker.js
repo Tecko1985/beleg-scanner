@@ -11,7 +11,8 @@
 // entfernen.
 //
 // Benoetigte Secrets (Cloudflare Dashboard -> Settings -> Variables):
-//   GEMINI_API_KEY, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN, SEARCH_PASSWORD
+//   GEMINI_API_KEY, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN,
+//   SEARCH_PASSWORD (schuetzt GET /search), UPLOAD_PASSWORD (schuetzt POST / - ohne dieses Secret sind Uploads gesperrt)
 
 import { CATEGORIES, FALLBACK_CATEGORY, isValidCategory } from './categories.js';
 import { buildSearchablePdf } from './pdf.js';
@@ -30,7 +31,7 @@ function corsHeaders() {
   return {
     'Access-Control-Allow-Origin': ALLOWED_ORIGIN,
     'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, X-Search-Password',
+    'Access-Control-Allow-Headers': 'Content-Type, X-Search-Password, X-Upload-Password',
   };
 }
 
@@ -126,7 +127,7 @@ function bytesToBase64(bytes) {
 
 // Schuetzt nur die Suche (liest bestehende Belege) - der Upload-Endpunkt bleibt bewusst offen.
 async function handleSearch(request, env, url) {
-  const password = request.headers.get('X-Search-Password') || url.searchParams.get('password') || '';
+  const password = request.headers.get('X-Search-Password') || '';
   if (!env.SEARCH_PASSWORD || password !== env.SEARCH_PASSWORD) {
     return jsonResponse({ ok: false, error: 'Falsches oder fehlendes Passwort.' }, 401);
   }
@@ -155,6 +156,13 @@ export default {
     }
     if (request.method !== 'POST') {
       return new Response('Method not allowed', { status: 405, headers: corsHeaders() });
+    }
+
+    // Upload schuetzen: nur mit gueltigem Token. Verhindert, dass Fremde ueber die
+    // (im Repo oeffentlich sichtbare) Worker-URL Uploads ausloesen -> Gemini-Quota-/Drive-Missbrauch.
+    // Faellt "nach sicher": fehlt das Secret UPLOAD_PASSWORD, sind alle Uploads gesperrt.
+    if (!env.UPLOAD_PASSWORD || (request.headers.get('X-Upload-Password') || '') !== env.UPLOAD_PASSWORD) {
+      return jsonResponse({ ok: false, error: 'Falsches oder fehlendes Upload-Passwort.' }, 401);
     }
 
     try {
