@@ -187,7 +187,7 @@ async function searchWithinScope(accessToken, scopeQ, q) {
   return Array.from(byId.values());
 }
 
-async function getFolderName(accessToken, folderId) {
+async function getFolderMeta(accessToken, folderId) {
   const res = await fetch(`${DRIVE_BASE}/files/${folderId}?fields=name,parents`, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
@@ -235,7 +235,7 @@ async function yearFolderTargets(accessToken, jahr) {
   const folderCache = new Map();
   const getFolder = async (id) => {
     if (folderCache.has(id)) return folderCache.get(id);
-    const folder = await getFolderName(accessToken, id);
+    const folder = await getFolderMeta(accessToken, id);
     folderCache.set(id, folder);
     return folder;
   };
