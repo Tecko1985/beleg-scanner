@@ -212,15 +212,26 @@ async function resolveCategoryPath(getFolder, yearFolder) {
   return segments.join('/');
 }
 
-// Loest fuer eine begrenzte Anzahl Kandidaten Jahr- und vollen Kategorie-Pfad auf und
-// filtert client-seitig nach den gewuenschten Werten. Wird nur fuer die "lockeren"
-// Filterkombinationen gebraucht, bei denen sich kein einzelner Ordner exakt auflösen
-// laesst (z.B. nur Kategorie ODER nur Jahr gesetzt).
-async function filterByResolvedPath(accessToken, files, kategorie, jahr) {
-  const limited = files.slice(0, 200);
-  // Ordnernamen ueber alle Treffer hinweg cachen: viele Dateien teilen sich denselben
-  // Jahres- und Kategorie-Ordner. Ohne Cache entstuenden ~4 API-Calls pro Datei und das
-  // Subrequest-Limit des Workers (Free-Tier: 50/Request) waere bei ~12 Treffern erreicht.
+// Sucht PDFs in einer Menge bekannter Blatt-Ordner (die direkt PDFs enthalten) und haengt
+// pro Treffer Jahr/Kategorie aus dem Ziel-Ordner an. Eine OR-Query ueber alle Ordner-IDs
+// statt Aufloesen pro Datei -> wenige Subrequests, unabhaengig von der Dateimenge.
+async function searchInFolders(accessToken, targetFolders, q) {
+  if (targetFolders.length === 0) return [];
+  const metaByParent = new Map(targetFolders.map((f) => [f.id, f]));
+  const ors = targetFolders.map((f) => `'${f.id}' in parents`).join(' or ');
+  const scopeQ = `(${ors}) and trashed=false and mimeType='application/pdf'`;
+  const files = await searchWithinScope(accessToken, scopeQ, q);
+  return files.map((f) => {
+    const meta = metaByParent.get(f.parents?.[0]) || {};
+    return toResult(f, meta.jahr || '', meta.kategorie || '');
+  });
+}
+
+// Nur-Jahr-Filter: alle Ordner namens <jahr> (einer je Kategorie) in EINER Abfrage holen und
+// je Ordner den vollen Kategorie-Pfad rekonstruieren (memoisiert, gebunden durch #Kategorien).
+async function yearFolderTargets(accessToken, jahr) {
+  const folderQ = `name='${escapeForQuery(String(jahr))}' and mimeType='application/vnd.google-apps.folder' and trashed=false`;
+  const yearFolders = await queryDrive(accessToken, folderQ);
   const folderCache = new Map();
   const getFolder = async (id) => {
     if (folderCache.has(id)) return folderCache.get(id);
@@ -228,20 +239,21 @@ async function filterByResolvedPath(accessToken, files, kategorie, jahr) {
     folderCache.set(id, folder);
     return folder;
   };
-
-  const results = [];
-  for (const file of limited) {
-    const yearFolderId = file.parents?.[0];
-    if (!yearFolderId) continue;
-    const yearFolder = await getFolder(yearFolderId);
-    if (!yearFolder) continue;
-    if (jahr && yearFolder.name !== String(jahr)) continue;
-
-    const categoryPath = await resolveCategoryPath(getFolder, yearFolder);
-    if (kategorie && categoryPath !== kategorie) continue;
-    results.push(toResult(file, yearFolder.name, categoryPath));
+  const targets = [];
+  for (const yf of yearFolders) {
+    const kategorie = await resolveCategoryPath(getFolder, yf);
+    targets.push({ id: yf.id, jahr: String(jahr), kategorie });
   }
-  return results;
+  return targets;
+}
+
+// Nur-Kategorie-Filter: Kategorie-Ordner einmal aufloesen, dann dessen Jahres-Unterordner listen.
+async function categoryFolderTargets(accessToken, kategorie) {
+  const catId = await findFolderByPath(accessToken, kategorie.split('/'));
+  if (!catId) return [];
+  const folderQ = `'${catId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`;
+  const yearFolders = await queryDrive(accessToken, folderQ);
+  return yearFolders.map((yf) => ({ id: yf.id, jahr: yf.name, kategorie }));
 }
 
 function toResult(file, year, kategorie) {
@@ -269,12 +281,15 @@ async function searchDocuments(env, { q, kategorie, jahr }) {
     return files.map((f) => toResult(f, String(jahr), kategorie));
   }
 
-  // Sonst: breite Query (per drive.file-Scope automatisch auf eigene Dateien beschraenkt),
-  // bei Bedarf client-seitig nach Kategorie/Jahr nachfiltern.
+  // Einzelfilter -> Ziel-Ordner top-down aufloesen (wenige Abfragen, unabhaengig von der
+  // Dateimenge) und PDFs direkt darin suchen. Vermeidet die fruehere Subrequest-Explosion.
+  if (jahr) return searchInFolders(accessToken, await yearFolderTargets(accessToken, jahr), q);
+  if (kategorie) return searchInFolders(accessToken, await categoryFolderTargets(accessToken, kategorie), q);
+
+  // Kein Filter -> breite Query (drive.file-Scope beschraenkt automatisch auf eigene Dateien).
   const broadScopeQ = `trashed=false and mimeType='application/pdf'`;
   const candidates = await searchWithinScope(accessToken, broadScopeQ, q);
-  if (!kategorie && !jahr) return candidates.map((f) => toResult(f, '', ''));
-  return filterByResolvedPath(accessToken, candidates, kategorie, jahr);
+  return candidates.map((f) => toResult(f, '', ''));
 }
 
 export { uploadDocument, searchDocuments };
