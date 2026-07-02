@@ -13,6 +13,13 @@
 // die Pruefung von GET /search und POST / ist an die zentrale ToolsUebersicht-
 // Landingpage delegiert (Worker "landingpage", Secrets PW_BELEGSCANNER_SUCHE /
 // PW_BELEGSCANNER_UPLOAD dort, siehe E:\ToolsUebersicht\admin-worker.js).
+//
+// Dafuer zusaetzlich ein SERVICE BINDING noetig (Dashboard -> dieser Worker ->
+// Bindings -> Add a binding -> Service binding -> Ziel-Worker "landingpage",
+// Variablenname "LANDINGPAGE"). Ein normaler fetch() an die *.workers.dev-URL
+// der Landingpage wird von Cloudflare mit Error 1042 geblockt, weil beide Worker
+// dieselbe workers.dev-Subdomain teilen (sieht aus wie eine potenzielle
+// Endlosschleife, ist aber keine) - Service Bindings umgehen das komplett.
 // ===========================================================================
 
 // --- categories.js ---------------------------------------------------------
@@ -641,20 +648,25 @@ function bytesToBase64(bytes) {
   return btoa(binary);
 }
 
-const LANDINGPAGE_WORKER_URL = 'https://landingpage.michel-brunner.workers.dev';
-
 // Delegiert den Passwort-Vergleich an die zentrale Landingpage (Aktion
 // verify-action-password) statt ihn lokal gegen ein eigenes Secret zu machen -
 // faellt bei Netzfehler oder nicht konfiguriertem Secret dort sicher zu (kein Zugriff).
-async function verifyActionPassword(scope, password) {
+// Laeuft ueber ein Service Binding (env.LANDINGPAGE, im Dashboard unter "Bindings"
+// eingerichtet) statt ueber einen normalen fetch() an die *.workers.dev-URL - ein
+// direkter fetch() zwischen zwei Workern derselben workers.dev-Subdomain wird von
+// Cloudflare als potenzielle Schleife geblockt (Error 1042), auch wenn es keine ist.
+async function verifyActionPassword(env, scope, password) {
   try {
-    const resp = await fetch(LANDINGPAGE_WORKER_URL, {
+    const resp = await env.LANDINGPAGE.fetch('https://landingpage/', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'verify-action-password', scope, password }),
     });
+    const bodyText = await resp.clone().text();
+    console.log('DEBUG verifyActionPassword', scope, 'HTTP', resp.status, 'BODY:', bodyText.slice(0, 300));
     return resp.ok;
-  } catch (_) {
+  } catch (e) {
+    console.error('DEBUG verifyActionPassword FEHLER:', e.message);
     return false;
   }
 }
@@ -663,7 +675,7 @@ async function verifyActionPassword(scope, password) {
 // per belegscanner-upload-Scope geschuetzt (siehe fetch-Handler unten).
 async function handleSearch(request, env, url) {
   const password = request.headers.get('X-Search-Password') || '';
-  if (!(await verifyActionPassword('belegscanner-suche', password))) {
+  if (!(await verifyActionPassword(env, 'belegscanner-suche', password))) {
     return jsonResponse({ ok: false, error: 'Falsches oder fehlendes Passwort.' }, 401);
   }
 
@@ -696,7 +708,7 @@ export default {
     // Upload schuetzen: nur mit gueltigem Token. Verhindert, dass Fremde ueber die
     // (im Repo oeffentlich sichtbare) Worker-URL Uploads ausloesen -> Gemini-Quota-/Drive-Missbrauch.
     // Faellt "nach sicher": fehlt das Secret auf der Landingpage, sind alle Uploads gesperrt.
-    if (!(await verifyActionPassword('belegscanner-upload', request.headers.get('X-Upload-Password') || ''))) {
+    if (!(await verifyActionPassword(env, 'belegscanner-upload', request.headers.get('X-Upload-Password') || ''))) {
       return jsonResponse({ ok: false, error: 'Falsches oder fehlendes Upload-Passwort.' }, 401);
     }
 
