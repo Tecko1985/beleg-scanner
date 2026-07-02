@@ -125,7 +125,8 @@ function bytesToBase64(bytes) {
   return btoa(binary);
 }
 
-// Schuetzt nur die Suche (liest bestehende Belege) - der Upload-Endpunkt bleibt bewusst offen.
+// Schuetzt die Suche (liest bestehende Belege); der Upload-Endpunkt ist separat
+// per UPLOAD_PASSWORD geschuetzt (siehe fetch-Handler unten).
 async function handleSearch(request, env, url) {
   const password = request.headers.get('X-Search-Password') || '';
   if (!env.SEARCH_PASSWORD || password !== env.SEARCH_PASSWORD) {
