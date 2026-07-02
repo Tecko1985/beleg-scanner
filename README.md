@@ -1,4 +1,4 @@
-# Beleg-Scanner (v1.0)
+# Beleg-Scanner (v1.1)
 
 Foto vom Handy → Google Gemini (kostenloser Tier) analysiert & kategorisiert → durchsuchbares PDF
 → landet automatisch im richtigen Ordner in Google Drive.
