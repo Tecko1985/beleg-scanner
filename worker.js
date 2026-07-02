@@ -11,8 +11,12 @@
 // entfernen.
 //
 // Benoetigte Secrets (Cloudflare Dashboard -> Settings -> Variables):
-//   GEMINI_API_KEY, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN,
-//   SEARCH_PASSWORD (schuetzt GET /search), UPLOAD_PASSWORD (schuetzt POST / - ohne dieses Secret sind Uploads gesperrt)
+//   GEMINI_API_KEY, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN
+//
+// SEARCH_PASSWORD/UPLOAD_PASSWORD gibt es hier NICHT mehr als eigene Secrets -
+// die Pruefung von GET /search und POST / ist an die zentrale ToolsUebersicht-
+// Landingpage delegiert (Worker "landingpage", Secrets PW_BELEGSCANNER_SUCHE /
+// PW_BELEGSCANNER_UPLOAD dort, siehe E:\ToolsUebersicht\admin-worker.js).
 
 import { CATEGORIES, FALLBACK_CATEGORY, isValidCategory } from './categories.js';
 import { buildSearchablePdf } from './pdf.js';
@@ -125,11 +129,29 @@ function bytesToBase64(bytes) {
   return btoa(binary);
 }
 
+const LANDINGPAGE_WORKER_URL = 'https://landingpage.michel-brunner.workers.dev';
+
+// Delegiert den Passwort-Vergleich an die zentrale Landingpage (Aktion
+// verify-action-password) statt ihn lokal gegen ein eigenes Secret zu machen -
+// faellt bei Netzfehler oder nicht konfiguriertem Secret dort sicher zu (kein Zugriff).
+async function verifyActionPassword(scope, password) {
+  try {
+    const resp = await fetch(LANDINGPAGE_WORKER_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'verify-action-password', scope, password }),
+    });
+    return resp.ok;
+  } catch (_) {
+    return false;
+  }
+}
+
 // Schuetzt die Suche (liest bestehende Belege); der Upload-Endpunkt ist separat
-// per UPLOAD_PASSWORD geschuetzt (siehe fetch-Handler unten).
+// per belegscanner-upload-Scope geschuetzt (siehe fetch-Handler unten).
 async function handleSearch(request, env, url) {
   const password = request.headers.get('X-Search-Password') || '';
-  if (!env.SEARCH_PASSWORD || password !== env.SEARCH_PASSWORD) {
+  if (!(await verifyActionPassword('belegscanner-suche', password))) {
     return jsonResponse({ ok: false, error: 'Falsches oder fehlendes Passwort.' }, 401);
   }
 
@@ -161,8 +183,8 @@ export default {
 
     // Upload schuetzen: nur mit gueltigem Token. Verhindert, dass Fremde ueber die
     // (im Repo oeffentlich sichtbare) Worker-URL Uploads ausloesen -> Gemini-Quota-/Drive-Missbrauch.
-    // Faellt "nach sicher": fehlt das Secret UPLOAD_PASSWORD, sind alle Uploads gesperrt.
-    if (!env.UPLOAD_PASSWORD || (request.headers.get('X-Upload-Password') || '') !== env.UPLOAD_PASSWORD) {
+    // Faellt "nach sicher": fehlt das Secret auf der Landingpage, sind alle Uploads gesperrt.
+    if (!(await verifyActionPassword('belegscanner-upload', request.headers.get('X-Upload-Password') || ''))) {
       return jsonResponse({ ok: false, error: 'Falsches oder fehlendes Upload-Passwort.' }, 401);
     }
 
