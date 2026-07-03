@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>📄 Beleg scannen</title>
+<style>
+  :root {
+    --blue: #1a56a0;
+    --green: #2d8c4e;
+    --gray: #f4f5f7;
+    --border: #dde1e8;
+    --text: #1e2330;
+    --muted: #6b7280;
+    --white: #ffffff;
+    --shadow: 0 2px 12px rgba(0,0,0,0.08);
+    --radius: 12px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', system-ui, sans-serif; background: #eef1f6; color: var(--text); min-height: 100vh; }
+  header { background: var(--blue); color: white; padding: 18px 24px; display: flex; align-items: center; gap: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); }
+  header span.icon { font-size: 1.6rem; }
+  header h1 { font-size: 1.2rem; font-weight: 700; }
+  .header-logo { height: 40px; width: auto; display: block; }
+  main { max-width: 560px; margin: 0 auto; padding: 24px 20px; }
+  .card { background: var(--white); border-radius: var(--radius); box-shadow: var(--shadow); padding: 22px; margin-bottom: 18px; }
+  .card h2 { font-size: 1rem; margin-bottom: 6px; }
+  .card p.hint { font-size: 0.85rem; color: var(--muted); line-height: 1.5; margin-bottom: 14px; }
+  .btn { border: none; border-radius: 8px; padding: 14px 20px; font-size: 1rem; font-weight: 700; cursor: pointer; width: 100%; display: inline-flex; align-items: center; justify-content: center; gap: 8px; transition: opacity 0.15s; }
+  .btn:hover { opacity: 0.88; }
+  .btn:disabled { opacity: 0.6; cursor: not-allowed; }
+  .btn-blue { background: var(--blue); color: white; }
+  .btn-green { background: var(--green); color: white; }
+  input[type="password"] { width: 100%; padding: 12px 14px; border: 1px solid var(--border); border-radius: 8px; font-size: 1rem; margin-bottom: 12px; font-family: inherit; }
+  .error-text { color: #b3261e; font-size: 0.85rem; margin-bottom: 12px; display: none; }
+  .camera-label {
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+    border: 2px dashed var(--blue); border-radius: var(--radius); padding: 36px 20px; cursor: pointer; color: var(--blue);
+    font-weight: 700; font-size: 1.05rem; text-align: center;
+  }
+  .camera-label .big-icon { font-size: 2.6rem; }
+  .preview-thumb { max-width: 100%; border-radius: 8px; margin-top: 12px; display: none; }
+  .result-row { display: flex; justify-content: space-between; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 0.9rem; }
+  .result-row:last-child { border-bottom: none; }
+  .result-row .label { color: var(--muted); }
+  .result-row .value { font-weight: 600; text-align: right; }
+  .toast {
+    position: fixed; bottom: 24px; right: 24px; left: 24px; background: var(--text); color: white; padding: 14px 18px;
+    border-radius: 10px; font-size: 0.9rem; font-weight: 600; box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+    opacity: 0; transform: translateY(10px); transition: all 0.3s; z-index: 999; text-align: center;
+  }
+  .toast.show { opacity: 1; transform: translateY(0); }
+  .success-box { display: none; }
+  .success-box .big { font-size: 2.4rem; text-align: center; margin-bottom: 8px; }
+  .spinner { display: none; text-align: center; padding: 20px 0; color: var(--muted); }
+
+  .multi-toggle { display: flex; align-items: center; gap: 8px; font-size: 0.9rem; margin-bottom: 14px; cursor: pointer; }
+  .multi-toggle input { width: 18px; height: 18px; }
+  .camera-label.disabled { opacity: 0.5; pointer-events: none; }
+
+  .thumb-strip { display: none; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+  .thumb-item { position: relative; width: 72px; height: 72px; border-radius: 8px; overflow: hidden; border: 1px solid var(--border); }
+  .thumb-item img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .thumb-page-num { position: absolute; bottom: 2px; left: 4px; background: rgba(0,0,0,0.6); color: white; font-size: 0.7rem; padding: 1px 5px; border-radius: 6px; }
+  .thumb-remove { position: absolute; top: 2px; right: 2px; width: 20px; height: 20px; border: none; border-radius: 50%; background: rgba(0,0,0,0.65); color: white; font-size: 0.75rem; cursor: pointer; line-height: 1; }
+
+  .import-list { margin-top: 14px; display: flex; flex-direction: column; gap: 8px; }
+  .import-row { display: flex; align-items: center; gap: 8px; padding: 8px 10px; background: var(--gray); border-radius: 8px; font-size: 0.85rem; }
+  .import-name { font-weight: 600; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 40%; }
+  .import-detail { color: var(--muted); flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+</style>
+</head>
+<body>
+<header>
+  <span class="icon">📄</span>
+  <h1>Beleg scannen</h1>
+  <a href="search.html" style="margin-left:auto;color:white;text-decoration:none;font-size:1.4rem" title="Belege durchsuchen">🔍</a>
+  <img class="header-logo" src="logo.png" alt="1. SC 1911 e.V. Heilbad Heiligenstadt" />
+</header>
+
+<main>
+  <div class="card" id="passwordCard" style="display:none">
+    <h2>🔒 Zugriff</h2>
+    <p class="hint">Bitte einmalig das Upload-Passwort eingeben. Es wird auf diesem Gerät gespeichert, damit du es nicht bei jedem Scan erneut brauchst.</p>
+    <div class="error-text" id="passwordError">Falsches Passwort.</div>
+    <input type="password" id="uploadPassword" placeholder="Passwort" onkeydown="if(event.key==='Enter')onPasswordSubmit()" />
+    <button class="btn btn-blue" onclick="onPasswordSubmit()">Weiter</button>
+  </div>
+
+  <div id="appContent" style="display:none">
+  <div class="card" id="formCard">
+    <h2>📸 Foto aufnehmen</h2>
+    <p class="hint">Mach ein Foto vom Beleg, der Rechnung oder dem Schreiben. Die KI erkennt automatisch Inhalt, Kategorie und Datum.</p>
+
+    <label class="multi-toggle">
+      <input type="checkbox" id="multiPageCheckbox" onchange="handleMultiPageToggle(event)" />
+      📑 Dieser Beleg hat mehrere Seiten
+    </label>
+
+    <label class="camera-label" for="photoInput" id="cameraLabel">
+      <span class="big-icon">📷</span>
+      <span id="cameraLabelText">Foto aufnehmen</span>
+    </label>
+    <input type="file" id="photoInput" accept="image/jpeg" capture="environment" style="display:none" onchange="handlePhotoSelect(event)" />
+    <img class="preview-thumb" id="previewThumb" alt="Vorschau" />
+    <div class="thumb-strip" id="thumbStrip"></div>
+    <div style="margin-top:16px">
+      <button class="btn btn-green" id="submitBtn" onclick="submitPhoto()" disabled>✅ Analysieren & ablegen</button>
+    </div>
+  </div>
+
+  <div class="card" id="importCard">
+    <h2>📁 Bereits digitale PDF-Rechnungen importieren</h2>
+    <p class="hint">Wähle eine oder mehrere PDF-Dateien (z.B. Rechnungen aus Online-Käufen) - jede Datei wird einzeln analysiert und automatisch eingeordnet.</p>
+    <label class="camera-label" for="importInput" id="importLabel">
+      <span class="big-icon">📁</span>
+      <span>PDF-Dateien auswählen</span>
+    </label>
+    <input type="file" id="importInput" accept="application/pdf" multiple style="display:none" onchange="handleImportSelect(event)" />
+    <div class="import-list" id="importList"></div>
+  </div>
+
+  <div class="spinner" id="spinner">⏳ Foto wird analysiert und abgelegt…</div>
+
+  <div class="card success-box" id="successBox">
+    <div class="big">✅</div>
+    <h2 style="text-align:center">Beleg abgelegt!</h2>
+    <div id="resultDetails"></div>
+    <button class="btn btn-blue" style="margin-top:16px" onclick="resetForm()">➕ Weiteren Beleg scannen</button>
+  </div>
+  </div>
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script>
+  // Cloudflare-Worker nimmt das Foto entgegen, lässt es per Google Gemini
+  // analysieren und legt das Ergebnis als durchsuchbares PDF in Google Drive ab.
+  // Siehe worker.js im Repo.
+  const WORKER_URL = 'https://beleg-scanner.michel-brunner.workers.dev/';
+  const MAX_PAGES = 10; // Spiegelbild der Server-Grenze in worker.js (MAX_PAGES)
+
+  let multiPageMode = false;
+  let capturedPages = []; // File[] - bei Einzelfoto-Modus max. 1 Eintrag
+
+  // --- Upload-Passwortschutz -------------------------------------------------
+  // Schuetzt den ansonsten offenen Upload-Endpunkt. Persistent im localStorage
+  // (einmal pro Geraet eingeben) - anders als die Suche, die pro Tab-Session fragt.
+  function getUploadPassword() {
+    return localStorage.getItem('uploadPassword') || '';
+  }
+  function showApp() {
+    document.getElementById('passwordCard').style.display = 'none';
+    document.getElementById('appContent').style.display = 'block';
+    document.getElementById('formCard').style.display = 'block';
+  }
+  function showPasswordGate(isError) {
+    document.getElementById('appContent').style.display = 'none';
+    document.getElementById('passwordCard').style.display = 'block';
+    document.getElementById('passwordError').style.display = isError ? 'block' : 'none';
+  }
+  function onPasswordSubmit() {
+    const pw = document.getElementById('uploadPassword').value;
+    if (!pw) return;
+    localStorage.setItem('uploadPassword', pw);
+    showApp();
+  }
+
+  function handleMultiPageToggle(e) {
+    multiPageMode = e.target.checked;
+    document.getElementById('cameraLabelText').textContent = multiPageMode ? 'Seite hinzufügen' : 'Foto aufnehmen';
+    resetCapture();
+  }
+
+  function handlePhotoSelect(e) {
+    const file = e.target.files[0];
+    e.target.value = ''; // erlaubt erneutes Aufnehmen ueber die Kamera (liefert ohnehin eine neue Datei)
+    if (!file) return;
+
+    if (multiPageMode) {
+      if (capturedPages.length >= MAX_PAGES) {
+        return toast(`Maximal ${MAX_PAGES} Seiten pro Beleg.`);
+      }
+      capturedPages.push(file);
+    } else {
+      capturedPages = [file];
+    }
+    renderThumbStrip();
+    updateSubmitState();
+  }
+
+  function removePage(index) {
+    capturedPages.splice(index, 1);
+    renderThumbStrip();
+    updateSubmitState();
+  }
+
+  function renderThumbStrip() {
+    const strip = document.getElementById('thumbStrip');
+    const previewThumb = document.getElementById('previewThumb');
+
+    if (!multiPageMode) {
+      strip.style.display = 'none';
+      strip.innerHTML = '';
+      if (capturedPages[0]) {
+        previewThumb.src = URL.createObjectURL(capturedPages[0]);
+        previewThumb.style.display = 'block';
+      } else {
+        previewThumb.style.display = 'none';
+      }
+      return;
+    }
+
+    previewThumb.style.display = 'none';
+    strip.style.display = capturedPages.length ? 'flex' : 'none';
+    strip.innerHTML = capturedPages.map((file, i) => `
+      <div class="thumb-item">
+        <img src="${URL.createObjectURL(file)}" alt="Seite ${i + 1}" />
+        <span class="thumb-page-num">${i + 1}</span>
+        <button class="thumb-remove" onclick="removePage(${i})" aria-label="Seite entfernen">✕</button>
+      </div>
+    `).join('');
+  }
+
+  function updateSubmitState() {
+    const btn = document.getElementById('submitBtn');
+    btn.disabled = capturedPages.length === 0;
+    btn.textContent = multiPageMode && capturedPages.length > 1
+      ? `✅ Alle ${capturedPages.length} Seiten analysieren & ablegen`
+      : '✅ Analysieren & ablegen';
+  }
+
+  function resetCapture() {
+    capturedPages = [];
+    document.getElementById('photoInput').value = '';
+    renderThumbStrip();
+    updateSubmitState();
+  }
+
+  async function submitPhoto() {
+    if (capturedPages.length === 0) return toast('Bitte zuerst ein Foto aufnehmen.');
+
+    document.getElementById('formCard').style.display = 'none';
+    document.getElementById('spinner').style.display = 'block';
+
+    try {
+      const form = new FormData();
+      for (const file of capturedPages) form.append('photo', file);
+
+      const res = await fetch(WORKER_URL, { method: 'POST', body: form, headers: { 'X-Upload-Password': getUploadPassword() } });
+      if (res.status === 401) {
+        localStorage.removeItem('uploadPassword');
+        showPasswordGate(true);
+        return;
+      }
+      const result = await res.json().catch(() => ({}));
+      if (!res.ok || !result.ok) throw new Error(result.error || `Server-Fehler (${res.status})`);
+
+      showResult(result);
+    } catch (e) {
+      toast('❌ Fehlgeschlagen: ' + e.message);
+      document.getElementById('formCard').style.display = 'block';
+    } finally {
+      document.getElementById('spinner').style.display = 'none';
+    }
+  }
+
+  async function handleImportSelect(e) {
+    const files = Array.from(e.target.files || []);
+    e.target.value = '';
+    if (files.length === 0) return;
+
+    const importLabel = document.getElementById('importLabel');
+    importLabel.classList.add('disabled');
+
+    const rows = files.map((file) => ({ file, status: 'pending' }));
+    renderImportList(rows);
+
+    // Sequentiell statt parallel, damit Gemini/Worker nicht ueberlastet werden
+    // und der Nutzer klares Pro-Datei-Feedback bekommt.
+    for (let i = 0; i < rows.length; i++) {
+      rows[i].status = 'processing';
+      renderImportList(rows);
+      try {
+        const form = new FormData();
+        form.append('photo', rows[i].file);
+        const res = await fetch(WORKER_URL, { method: 'POST', body: form, headers: { 'X-Upload-Password': getUploadPassword() } });
+        if (res.status === 401) {
+          localStorage.removeItem('uploadPassword');
+          importLabel.classList.remove('disabled');
+          showPasswordGate(true);
+          return;
+        }
+        const result = await res.json().catch(() => ({}));
+        if (!res.ok || !result.ok) throw new Error(result.error || `Server-Fehler (${res.status})`);
+        rows[i].status = 'done';
+        rows[i].result = result;
+      } catch (err) {
+        rows[i].status = 'error';
+        rows[i].error = err.message;
+      }
+      renderImportList(rows);
+    }
+
+    importLabel.classList.remove('disabled');
+  }
+
+  function renderImportList(rows) {
+    const list = document.getElementById('importList');
+    list.innerHTML = rows.map((r) => {
+      const icon = r.status === 'pending' ? '⏳' : r.status === 'processing' ? '🔄' : r.status === 'done' ? '✅' : '❌';
+      const detail = r.status === 'done' ? r.result.pfad
+        : r.status === 'error' ? r.error
+        : r.status === 'processing' ? 'wird verarbeitet…'
+        : 'wartet…';
+      return `
+        <div class="import-row">
+          <span>${icon}</span>
+          <span class="import-name">${escapeHtml(r.file.name)}</span>
+          <span class="import-detail">${escapeHtml(detail)}</span>
+        </div>
+      `;
+    }).join('');
+  }
+
+  function showResult(result) {
+    const details = document.getElementById('resultDetails');
+    const rows = [
+      ['Kategorie', result.kategorie],
+      ['Aussteller', result.aussteller || '–'],
+      ['Datum', result.datum || '–'],
+      ['Betrag', result.betrag || '–'],
+      ['Abgelegt unter', result.pfad],
+    ];
+    details.innerHTML = rows.map(([label, value]) => `
+      <div class="result-row">
+        <span class="label">${escapeHtml(label)}</span>
+        <span class="value">${escapeHtml(value)}</span>
+      </div>
+    `).join('');
+    document.getElementById('successBox').style.display = 'block';
+  }
+
+  function escapeHtml(str) {
+    return String(str ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  function resetForm() {
+    resetCapture();
+    document.getElementById('successBox').style.display = 'none';
+    document.getElementById('formCard').style.display = 'block';
+  }
+
+  function toast(msg) {
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.classList.add('show');
+    setTimeout(() => t.classList.remove('show'), 3500);
+  }
+
+  // Initiales Gate: ohne gespeichertes Passwort erst die Passwort-Karte zeigen.
+  if (getUploadPassword()) showApp(); else showPasswordGate(false);
+</script>
+</body>
+</html>
