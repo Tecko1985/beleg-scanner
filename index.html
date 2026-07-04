@@ -68,9 +68,22 @@
   .import-row { display: flex; align-items: center; gap: 8px; padding: 8px 10px; background: var(--gray); border-radius: 8px; font-size: 0.85rem; }
   .import-name { font-weight: 600; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 40%; }
   .import-detail { color: var(--muted); flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .dashboard-bar { max-width: 560px; margin: 0 auto; padding: 10px 20px 0; }
+  .back-to-dashboard {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--blue);
+    text-decoration: none;
+  }
+  .back-to-dashboard:hover { text-decoration: underline; }
 </style>
 </head>
 <body>
+<div class="dashboard-bar"><a href="https://tecko1985.github.io/ToolsUebersicht/" class="back-to-dashboard">← Zurück zum Dashboard</a></div>
 <header>
   <span class="icon">📄</span>
   <h1>Beleg scannen</h1>
