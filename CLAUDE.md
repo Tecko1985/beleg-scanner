@@ -10,7 +10,7 @@ Foto-zu-PDF-Tool (github.com/Tecko1985/beleg-scanner): Foto vom Handy → Google
 
 ## Setup
 
-Erfordert Gemini-API-Key + Google-OAuth-Client (Drive-Zugriff) + Cloudflare-Worker-Secrets (`GEMINI_API_KEY`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REFRESH_TOKEN`) — volle Anleitung in `README.md`. Die Passwörter für Suche/Upload (`SEARCH_PASSWORD`/`UPLOAD_PASSWORD`) sind keine eigenen Secrets mehr, sondern werden per `verify-action-password` an die ToolsUebersicht-Landingpage delegiert (Scopes `belegscanner-suche`/`belegscanner-upload`, Secrets `PW_BELEGSCANNER_SUCHE`/`PW_BELEGSCANNER_UPLOAD` dort).
+Erfordert Gemini-API-Key + Google-OAuth-Client (Drive-Zugriff) + Cloudflare-Worker-Secrets (`GEMINI_API_KEY`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REFRESH_TOKEN`) — volle Anleitung in `README.md`. Die Passwörter für Suche/Upload (`SEARCH_PASSWORD`/`UPLOAD_PASSWORD`) sind eigene Secrets dieses Workers (lokaler SHA-256-Digest-Vergleich in `checkPassword`, `worker.js`) — **seit 2026-07-05 bewusst wieder eigenständig**, vorher kurzzeitig per `verify-action-password` an die ToolsUebersicht-Landingpage delegiert (Service Binding). Grund für den Rückbau: beleg-scanner ist ein privates Tool und soll nicht von der Vereins-Landingpage abhängen — siehe [[project-toolsuebersicht]].
 
 ## Gotcha — GitHub Pages zeigt nur README statt App
 

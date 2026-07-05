@@ -11,19 +11,13 @@
 // entfernen.
 //
 // Benoetigte Secrets (Cloudflare Dashboard -> Settings -> Variables):
-//   GEMINI_API_KEY, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN
+//   GEMINI_API_KEY, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN,
+//   SEARCH_PASSWORD, UPLOAD_PASSWORD
 //
-// SEARCH_PASSWORD/UPLOAD_PASSWORD gibt es hier NICHT mehr als eigene Secrets -
-// die Pruefung von GET /search und POST / ist an die zentrale ToolsUebersicht-
-// Landingpage delegiert (Worker "landingpage", Secrets PW_BELEGSCANNER_SUCHE /
-// PW_BELEGSCANNER_UPLOAD dort, siehe E:\ToolsUebersicht\admin-worker.js).
-//
-// Dafuer zusaetzlich ein SERVICE BINDING noetig (Dashboard -> dieser Worker ->
-// Bindings -> Add a binding -> Service binding -> Ziel-Worker "landingpage",
-// Variablenname "LANDINGPAGE"). Ein normaler fetch() an die *.workers.dev-URL
-// der Landingpage wird von Cloudflare mit Error 1042 geblockt, weil beide Worker
-// dieselbe workers.dev-Subdomain teilen (sieht aus wie eine potenzielle
-// Endlosschleife, ist aber keine) - Service Bindings umgehen das komplett.
+// SEARCH_PASSWORD schuetzt GET /search, UPLOAD_PASSWORD schuetzt POST / (Upload) -
+// beide Werte frei waehlbar, Vergleich per SHA-256-Digest + konstante Zeit (siehe
+// checkPassword weiter unten). Vollstaendig eigenstaendig, keine Abhaengigkeit von
+// einem anderen Worker oder Service Binding.
 
 import { CATEGORIES, FALLBACK_CATEGORY, isValidCategory } from './categories.js';
 import { buildSearchablePdf } from './pdf.js';
@@ -136,34 +130,30 @@ function bytesToBase64(bytes) {
   return btoa(binary);
 }
 
-// Delegiert den Passwort-Vergleich an die zentrale Landingpage (Aktion
-// verify-action-password) statt ihn lokal gegen ein eigenes Secret zu machen -
-// faellt bei Netzfehler oder nicht konfiguriertem Secret dort sicher zu (kein Zugriff).
-// Laeuft ueber ein Service Binding (env.LANDINGPAGE, im Dashboard unter "Bindings"
-// eingerichtet) statt ueber einen normalen fetch() an die *.workers.dev-URL - ein
-// direkter fetch() zwischen zwei Workern derselben workers.dev-Subdomain wird von
-// Cloudflare als potenzielle Schleife geblockt (Error 1042), auch wenn es keine ist.
-async function verifyActionPassword(env, scope, password) {
-  try {
-    const resp = await env.LANDINGPAGE.fetch('https://landingpage/', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'verify-action-password', scope, password }),
-    });
-    const bodyText = await resp.clone().text();
-    console.log('DEBUG verifyActionPassword', scope, 'HTTP', resp.status, 'BODY:', bodyText.slice(0, 300));
-    return resp.ok;
-  } catch (e) {
-    console.error('DEBUG verifyActionPassword FEHLER:', e.message);
-    return false;
-  }
+// Vergleich ueber SHA-256-Digests gleicher Laenge + konstante-Zeit-Vergleich, damit
+// weder Timing noch ein Laengen-Check das Passwort verraet. Fehlt das Secret, sind
+// alle Zugriffe gesperrt (fail-closed).
+async function checkPassword(env, secretName, given) {
+  const secret = env[secretName];
+  if (!secret) return false;
+  const enc = new TextEncoder();
+  const [a, b] = await Promise.all([
+    crypto.subtle.digest('SHA-256', enc.encode(given || '')),
+    crypto.subtle.digest('SHA-256', enc.encode(secret)),
+  ]);
+  const aBytes = new Uint8Array(a);
+  const bBytes = new Uint8Array(b);
+  let diff = 0;
+  for (let i = 0; i < aBytes.length; i++) diff |= aBytes[i] ^ bBytes[i];
+  return diff === 0;
 }
 
 // Schuetzt die Suche (liest bestehende Belege); der Upload-Endpunkt ist separat
-// per belegscanner-upload-Scope geschuetzt (siehe fetch-Handler unten).
+// per eigenem UPLOAD_PASSWORD-Secret geschuetzt (siehe fetch-Handler unten).
 async function handleSearch(request, env, url) {
   const password = request.headers.get('X-Search-Password') || '';
-  if (!(await verifyActionPassword(env, 'belegscanner-suche', password))) {
+  if (!(await checkPassword(env, 'SEARCH_PASSWORD', password))) {
+    await new Promise((resolve) => setTimeout(resolve, 800)); // Bremse gegen Durchprobieren, ohne Login erreichbar
     return jsonResponse({ ok: false, error: 'Falsches oder fehlendes Passwort.' }, 401);
   }
 
@@ -193,10 +183,11 @@ export default {
       return new Response('Method not allowed', { status: 405, headers: corsHeaders() });
     }
 
-    // Upload schuetzen: nur mit gueltigem Token. Verhindert, dass Fremde ueber die
+    // Upload schuetzen: nur mit gueltigem Passwort. Verhindert, dass Fremde ueber die
     // (im Repo oeffentlich sichtbare) Worker-URL Uploads ausloesen -> Gemini-Quota-/Drive-Missbrauch.
-    // Faellt "nach sicher": fehlt das Secret auf der Landingpage, sind alle Uploads gesperrt.
-    if (!(await verifyActionPassword(env, 'belegscanner-upload', request.headers.get('X-Upload-Password') || ''))) {
+    // Faellt "nach sicher": fehlt das Secret, sind alle Uploads gesperrt.
+    if (!(await checkPassword(env, 'UPLOAD_PASSWORD', request.headers.get('X-Upload-Password') || ''))) {
+      await new Promise((resolve) => setTimeout(resolve, 800));
       return jsonResponse({ ok: false, error: 'Falsches oder fehlendes Upload-Passwort.' }, 401);
     }
 
