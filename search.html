@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>🔍 Beleg-Suche</title>
+<style>
+  :root {
+    --blue: #1a56a0;
+    --green: #2d8c4e;
+    --gray: #f4f5f7;
+    --border: #dde1e8;
+    --text: #1e2330;
+    --muted: #6b7280;
+    --white: #ffffff;
+    --shadow: 0 2px 12px rgba(0,0,0,0.08);
+    --radius: 12px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', system-ui, sans-serif; background: #eef1f6; color: var(--text); min-height: 100vh; }
+  header { background: var(--blue); color: white; padding: 18px 24px; display: flex; align-items: center; gap: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); }
+  header span.icon { font-size: 1.6rem; }
+  header h1 { font-size: 1.2rem; font-weight: 700; }
+  .header-logo { height: 40px; width: auto; display: block; margin-left: auto; }
+  main { max-width: 560px; margin: 0 auto; padding: 24px 20px; }
+  .card { background: var(--white); border-radius: var(--radius); box-shadow: var(--shadow); padding: 22px; margin-bottom: 18px; }
+  .card h2 { font-size: 1rem; margin-bottom: 6px; }
+  .card p.hint { font-size: 0.85rem; color: var(--muted); line-height: 1.5; margin-bottom: 14px; }
+  .btn { border: none; border-radius: 8px; padding: 14px 20px; font-size: 1rem; font-weight: 700; cursor: pointer; width: 100%; display: inline-flex; align-items: center; justify-content: center; gap: 8px; transition: opacity 0.15s; }
+  .btn:hover { opacity: 0.88; }
+  .btn:disabled { opacity: 0.6; cursor: not-allowed; }
+  .btn-blue { background: var(--blue); color: white; }
+  input[type="text"], input[type="password"], select {
+    width: 100%; padding: 12px 14px; border: 1px solid var(--border); border-radius: 8px; font-size: 1rem;
+    margin-bottom: 12px; font-family: inherit;
+  }
+  .filter-row { display: flex; gap: 10px; }
+  .filter-row select { flex: 1; }
+  .result-row { display: flex; justify-content: space-between; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--border); font-size: 0.9rem; }
+  .result-row:last-child { border-bottom: none; }
+  .result-row .info { display: flex; flex-direction: column; gap: 2px; }
+  .result-row .name { font-weight: 600; }
+  .result-row .meta { color: var(--muted); font-size: 0.8rem; }
+  .result-row a { color: var(--blue); font-weight: 700; text-decoration: none; white-space: nowrap; align-self: center; }
+  .spinner { display: none; text-align: center; padding: 20px 0; color: var(--muted); }
+  .empty-state { text-align: center; padding: 20px 0; color: var(--muted); font-size: 0.9rem; display: none; }
+  .toast {
+    position: fixed; bottom: 24px; right: 24px; left: 24px; background: var(--text); color: white; padding: 14px 18px;
+    border-radius: 10px; font-size: 0.9rem; font-weight: 600; box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+    opacity: 0; transform: translateY(10px); transition: all 0.3s; z-index: 999; text-align: center;
+  }
+  .toast.show { opacity: 1; transform: translateY(0); }
+  .error-text { color: #b3261e; font-size: 0.85rem; margin-bottom: 12px; display: none; }
+</style>
+</head>
+<body>
+<header>
+  <span class="icon">🔍</span>
+  <h1>Beleg-Suche</h1>
+  <img class="header-logo" src="logo.png" alt="1. SC 1911 e.V. Heilbad Heiligenstadt" />
+</header>
+
+<main>
+  <div class="card" id="passwordCard" style="display:none">
+    <h2>🔒 Zugriff</h2>
+    <p class="hint">Diese Suche zeigt deine privaten Belege - bitte Passwort eingeben.</p>
+    <div class="error-text" id="passwordError">Falsches Passwort.</div>
+    <input type="password" id="searchPassword" placeholder="Passwort" onkeydown="if(event.key==='Enter')onPasswordSubmit()" />
+    <button class="btn btn-blue" onclick="onPasswordSubmit()">Weiter</button>
+  </div>
+
+  <div class="card" id="searchCard" style="display:none">
+    <h2>Suche</h2>
+    <p class="hint">Freitext durchsucht Dateiname und erkannten Inhalt. Filter sind optional kombinierbar.</p>
+    <input type="text" id="searchQuery" placeholder="Suchbegriff (Aussteller, Inhalt, ...)" onkeydown="if(event.key==='Enter')runSearch()" />
+    <div class="filter-row">
+      <select id="kategorieFilter"></select>
+      <select id="jahrFilter"></select>
+    </div>
+    <button class="btn btn-blue" onclick="runSearch()">🔍 Suchen</button>
+  </div>
+
+  <div class="spinner" id="spinner">⏳ Suche läuft…</div>
+  <div class="empty-state" id="emptyState">Keine Treffer.</div>
+
+  <div class="card" id="resultsCard" style="display:none">
+    <h2>Ergebnisse</h2>
+    <div id="resultsList"></div>
+  </div>
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script>
+  // Gleicher Worker wie index.html, neue GET /search-Route (siehe worker.js).
+  // Muss bei einem Worker-Domain-Wechsel an beiden Stellen aktualisiert werden.
+  const WORKER_URL = 'https://beleg-scanner.michel-brunner.workers.dev/';
+
+  // Bewusste Kopie von categories.js - kein Import, um die statische Seite nicht an
+  // einen festen relativen Pfad zu binden. Bei Aenderungen in categories.js hier nachziehen.
+  const CATEGORIES = [
+    'Rechnungen/Hardware-Rechner',
+    'Rechnungen/Software-Lizenzen',
+    'Rechnungen/Telekommunikation',
+    'Rechnungen/Versicherungen',
+    'Rechnungen/Energie',
+    'Rechnungen/KFZ',
+    'Rechnungen/Gesundheit',
+    'Belege/Sonstiges',
+    'Notar',
+    'Vertraege',
+    'Steuern-Finanzamt',
+    'Sonstiges',
+  ];
+
+  function getStoredPassword() {
+    return sessionStorage.getItem('searchPassword') || '';
+  }
+
+  function populateFilters() {
+    const kategorieSelect = document.getElementById('kategorieFilter');
+    kategorieSelect.innerHTML = '<option value="">Alle Kategorien</option>' +
+      CATEGORIES.map((c) => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
+
+    const jahrSelect = document.getElementById('jahrFilter');
+    const currentYear = new Date().getFullYear();
+    let yearOptions = '<option value="">Alle Jahre</option>';
+    for (let y = currentYear; y >= currentYear - 5; y--) {
+      yearOptions += `<option value="${y}">${y}</option>`;
+    }
+    jahrSelect.innerHTML = yearOptions;
+  }
+
+  function onPasswordSubmit() {
+    const pw = document.getElementById('searchPassword').value;
+    if (!pw) return;
+    sessionStorage.setItem('searchPassword', pw);
+    document.getElementById('passwordError').style.display = 'none';
+    runSearch();
+  }
+
+  async function runSearch() {
+    const pw = getStoredPassword();
+    if (!pw) {
+      document.getElementById('passwordCard').style.display = 'block';
+      document.getElementById('searchCard').style.display = 'none';
+      return;
+    }
+
+    document.getElementById('searchCard').style.display = 'block';
+    document.getElementById('resultsCard').style.display = 'none';
+    document.getElementById('emptyState').style.display = 'none';
+    document.getElementById('spinner').style.display = 'block';
+
+    const q = document.getElementById('searchQuery').value.trim();
+    const kategorie = document.getElementById('kategorieFilter').value;
+    const jahr = document.getElementById('jahrFilter').value;
+
+    const params = new URLSearchParams();
+    if (q) params.set('q', q);
+    if (kategorie) params.set('kategorie', kategorie);
+    if (jahr) params.set('jahr', jahr);
+
+    try {
+      const res = await fetch(`${WORKER_URL}search?${params}`, {
+        headers: { 'X-Search-Password': pw },
+      });
+
+      if (res.status === 401) {
+        sessionStorage.removeItem('searchPassword');
+        document.getElementById('passwordCard').style.display = 'block';
+        document.getElementById('passwordError').style.display = 'block';
+        document.getElementById('searchCard').style.display = 'none';
+        return;
+      }
+
+      const result = await res.json().catch(() => ({}));
+      if (!res.ok || !result.ok) throw new Error(result.error || `Server-Fehler (${res.status})`);
+
+      document.getElementById('passwordCard').style.display = 'none';
+      document.getElementById('searchCard').style.display = 'block';
+      renderResults(result.results || []);
+    } catch (e) {
+      toast('❌ Fehlgeschlagen: ' + e.message);
+    } finally {
+      document.getElementById('spinner').style.display = 'none';
+    }
+  }
+
+  function renderResults(results) {
+    if (results.length === 0) {
+      document.getElementById('emptyState').style.display = 'block';
+      document.getElementById('resultsCard').style.display = 'none';
+      return;
+    }
+
+    const list = document.getElementById('resultsList');
+    list.innerHTML = results.map((r) => {
+      const meta = [r.kategorie, r.jahr, r.createdTime ? r.createdTime.slice(0, 10) : '']
+        .filter(Boolean).join(' · ');
+      return `
+        <div class="result-row">
+          <div class="info">
+            <span class="name">${escapeHtml(r.name)}</span>
+            <span class="meta">${escapeHtml(meta)}</span>
+          </div>
+          <a href="${escapeHtml(r.webUrl)}" target="_blank" rel="noopener">📂 Öffnen</a>
+        </div>
+      `;
+    }).join('');
+    document.getElementById('resultsCard').style.display = 'block';
+  }
+
+  function escapeHtml(str) {
+    return String(str ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  function toast(msg) {
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.classList.add('show');
+    setTimeout(() => t.classList.remove('show'), 3500);
+  }
+
+  populateFilters();
+  if (getStoredPassword()) {
+    document.getElementById('searchCard').style.display = 'block';
+  } else {
+    document.getElementById('passwordCard').style.display = 'block';
+  }
+</script>
+</body>
+</html>
