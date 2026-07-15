@@ -64,10 +64,24 @@
   .thumb-page-num { position: absolute; bottom: 2px; left: 4px; background: rgba(0,0,0,0.6); color: white; font-size: 0.7rem; padding: 1px 5px; border-radius: 6px; }
   .thumb-remove { position: absolute; top: 2px; right: 2px; width: 20px; height: 20px; border: none; border-radius: 50%; background: rgba(0,0,0,0.65); color: white; font-size: 0.75rem; cursor: pointer; line-height: 1; }
 
-  .import-list { margin-top: 14px; display: flex; flex-direction: column; gap: 8px; }
-  .import-row { display: flex; align-items: center; gap: 8px; padding: 8px 10px; background: var(--gray); border-radius: 8px; font-size: 0.85rem; }
-  .import-name { font-weight: 600; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 40%; }
-  .import-detail { color: var(--muted); flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* Warteschlangen-Liste der Hintergrund-Vorgaenge */
+  .jobs-card h2 { display: flex; align-items: center; gap: 8px; }
+  .jobs-count { font-size: 0.78rem; font-weight: 600; color: var(--muted); margin-left: auto; }
+  .job-list { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
+  .job-item { display: flex; gap: 10px; align-items: flex-start; padding: 10px; background: var(--gray); border-radius: 10px; }
+  .job-thumb { width: 44px; height: 44px; border-radius: 8px; object-fit: cover; flex: 0 0 auto; background: #e2e6ee; display: inline-flex; align-items: center; justify-content: center; font-size: 1.3rem; }
+  .job-body { flex: 1 1 auto; min-width: 0; }
+  .job-title { font-weight: 600; font-size: 0.9rem; display: flex; align-items: center; gap: 6px; }
+  .job-status-icon { flex: 0 0 auto; }
+  .job-detail { font-size: 0.8rem; color: var(--muted); margin-top: 3px; word-break: break-word; line-height: 1.4; }
+  .job-detail.error { color: #b3261e; }
+  .job-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 7px; }
+  .job-actions button, .job-actions a { font-size: 0.78rem; font-weight: 600; border: none; background: none; color: var(--blue); cursor: pointer; padding: 0; text-decoration: none; font-family: inherit; }
+  .job-actions button:hover, .job-actions a:hover { text-decoration: underline; }
+  .jobs-clear { margin-top: 14px; font-size: 0.8rem; color: var(--muted); background: none; border: none; cursor: pointer; font-family: inherit; }
+  .jobs-clear:hover { text-decoration: underline; }
+  .spin { display: inline-block; animation: spin 1.1s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
 
   .dashboard-bar { max-width: 560px; margin: 0 auto; padding: 10px 20px 0; }
   .back-to-dashboard {
@@ -122,6 +136,12 @@
     </div>
   </div>
 
+  <div class="card jobs-card" id="jobsCard" style="display:none">
+    <h2>📋 Vorgänge<span class="jobs-count" id="jobsCount"></span></h2>
+    <div class="job-list" id="jobList"></div>
+    <button class="jobs-clear" id="jobsClear" style="display:none" onclick="clearFinishedJobs()">Erledigte ausblenden</button>
+  </div>
+
   <div class="card" id="importCard">
     <h2>📁 Bereits digitale PDF-Rechnungen importieren</h2>
     <p class="hint">Wähle eine oder mehrere PDF-Dateien (z.B. Rechnungen aus Online-Käufen) - jede Datei wird einzeln analysiert und automatisch eingeordnet.</p>
@@ -130,16 +150,6 @@
       <span>PDF-Dateien auswählen</span>
     </label>
     <input type="file" id="importInput" accept="application/pdf" multiple style="display:none" onchange="handleImportSelect(event)" />
-    <div class="import-list" id="importList"></div>
-  </div>
-
-  <div class="spinner" id="spinner">⏳ Foto wird analysiert und abgelegt…</div>
-
-  <div class="card success-box" id="successBox">
-    <div class="big">✅</div>
-    <h2 style="text-align:center">Beleg abgelegt!</h2>
-    <div id="resultDetails"></div>
-    <button class="btn btn-blue" style="margin-top:16px" onclick="resetForm()">➕ Weiteren Beleg scannen</button>
   </div>
   </div>
 </main>
@@ -149,12 +159,23 @@
 <script>
   // Cloudflare-Worker nimmt das Foto entgegen, lässt es per Google Gemini
   // analysieren und legt das Ergebnis als durchsuchbares PDF in Google Drive ab.
-  // Siehe worker.js im Repo.
+  // Siehe worker.js im Repo. Uploads laufen als Hintergrund-Warteschlange
+  // (sequentiell abgearbeitet), damit direkt der nächste Beleg gescannt werden
+  // kann, während der vorige noch analysiert und abgelegt wird.
   const WORKER_URL = 'https://beleg-scanner.michel-brunner.workers.dev/';
   const MAX_PAGES = 10; // Spiegelbild der Server-Grenze in worker.js (MAX_PAGES)
+  const MAX_OPEN_JOBS = 10; // max. gleichzeitig offene Vorgänge (wartend + laufend)
 
   let multiPageMode = false;
   let capturedPages = []; // File[] - bei Einzelfoto-Modus max. 1 Eintrag
+
+  // --- Hintergrund-Warteschlange ---------------------------------------------
+  // Sequentiell abgearbeitet (nur 1 Upload gleichzeitig zum Worker): schützt vor
+  // dem Gemini-Rate-Limit und einer Race beim parallelen Anlegen desselben
+  // Drive-Ordners (ensureFolder in google-drive.js ist read-then-create).
+  let jobs = [];      // { id, files:File[], kind:'photo'|'pdf', label, thumbUrl, status, result, error }
+  let jobSeq = 0;
+  let queueRunning = false;
 
   // --- Upload-Passwortschutz -------------------------------------------------
   // Schuetzt den ansonsten offenen Upload-Endpunkt. Persistent im localStorage
@@ -165,18 +186,27 @@
   function showApp() {
     document.getElementById('passwordCard').style.display = 'none';
     document.getElementById('appContent').style.display = 'block';
-    document.getElementById('formCard').style.display = 'block';
   }
   function showPasswordGate(isError) {
-    document.getElementById('appContent').style.display = 'none';
-    document.getElementById('passwordCard').style.display = 'block';
+    const card = document.getElementById('passwordCard');
+    card.style.display = 'block';
     document.getElementById('passwordError').style.display = isError ? 'block' : 'none';
+    // Laufen schon Vorgänge (Auth-Fehler mitten im Betrieb), App sichtbar lassen,
+    // damit die Warteschlange sichtbar bleibt; sonst (Erst-Zugriff) App verbergen.
+    document.getElementById('appContent').style.display = jobs.length ? 'block' : 'none';
+    if (jobs.length) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
   function onPasswordSubmit() {
-    const pw = document.getElementById('uploadPassword').value;
+    const input = document.getElementById('uploadPassword');
+    const pw = input.value;
     if (!pw) return;
     localStorage.setItem('uploadPassword', pw);
+    input.value = '';
     showApp();
+    // Nach einem 401 geparkte Vorgänge mit dem neuen Passwort fortsetzen.
+    let resumed = false;
+    for (const j of jobs) if (j.status === 'auth') { j.status = 'queued'; resumed = true; }
+    if (resumed) { renderJobs(); runQueue(); }
   }
 
   function handleMultiPageToggle(e) {
@@ -250,118 +280,189 @@
     updateSubmitState();
   }
 
-  async function submitPhoto() {
+  // Absenden blockiert nicht mehr: Beleg in die Warteschlange stellen und das
+  // Formular sofort für den nächsten Scan freigeben.
+  function submitPhoto() {
     if (capturedPages.length === 0) return toast('Bitte zuerst ein Foto aufnehmen.');
+    if (!enqueueUpload(capturedPages.slice(), 'photo')) return;
+    toast('📤 Beleg wird im Hintergrund verarbeitet – du kannst direkt weitermachen.');
+    resetCapture();
+  }
 
-    document.getElementById('formCard').style.display = 'none';
-    document.getElementById('spinner').style.display = 'block';
+  function handleImportSelect(e) {
+    const files = Array.from(e.target.files || []);
+    e.target.value = '';
+    if (files.length === 0) return;
+    let added = 0;
+    for (const file of files) { if (enqueueUpload([file], 'pdf')) added++; else break; }
+    const skipped = files.length - added;
+    if (added) {
+      toast(`📤 ${added} PDF${added > 1 ? 's' : ''} in der Warteschlange` +
+        (skipped ? ` (${skipped} übrig – max. ${MAX_OPEN_JOBS} gleichzeitig)` : '') + '.');
+    } else {
+      toast(`Maximal ${MAX_OPEN_JOBS} Vorgänge gleichzeitig – bitte warten, bis welche fertig sind.`);
+    }
+  }
 
+  // --- Warteschlangen-Mechanik ----------------------------------------------
+  function openJobCount() {
+    return jobs.filter(j => j.status === 'queued' || j.status === 'processing' || j.status === 'auth').length;
+  }
+
+  function enqueueUpload(files, kind) {
+    if (!files.length) return false;
+    if (openJobCount() >= MAX_OPEN_JOBS) {
+      toast(`Maximal ${MAX_OPEN_JOBS} Vorgänge gleichzeitig – bitte kurz warten.`);
+      return false;
+    }
+    jobs.push({
+      id: ++jobSeq,
+      files,
+      kind,
+      label: kind === 'pdf' ? files[0].name
+        : files.length > 1 ? `Beleg · ${files.length} Seiten` : 'Beleg',
+      thumbUrl: kind === 'photo' ? URL.createObjectURL(files[0]) : '',
+      status: 'queued',
+      result: null,
+      error: null,
+    });
+    renderJobs();
+    runQueue();
+    return true;
+  }
+
+  // Ein einzelner Abarbeitungs-Loop (queueRunning verhindert parallele Läufe) holt
+  // sich immer den ältesten wartenden Job und verarbeitet ihn, bis nichts mehr wartet.
+  async function runQueue() {
+    if (queueRunning) return;
+    queueRunning = true;
+    try {
+      let job;
+      while ((job = jobs.find(j => j.status === 'queued'))) {
+        // Kein Passwort (z.B. nach 401 verworfen): Job parken statt sinnlos senden.
+        if (!getUploadPassword()) {
+          job.status = 'auth';
+          renderJobs();
+          if (document.getElementById('passwordCard').style.display !== 'block') showPasswordGate(false);
+          continue;
+        }
+        job.status = 'processing';
+        renderJobs();
+        await processJob(job);
+        renderJobs();
+      }
+    } finally {
+      queueRunning = false;
+    }
+  }
+
+  async function processJob(job) {
     try {
       const form = new FormData();
-      for (const file of capturedPages) form.append('photo', file);
-
-      const res = await fetch(WORKER_URL, { method: 'POST', body: form, headers: { 'X-Upload-Password': getUploadPassword() } });
+      for (const file of job.files) form.append('photo', file);
+      const res = await fetch(WORKER_URL, {
+        method: 'POST', body: form,
+        headers: { 'X-Upload-Password': getUploadPassword() },
+      });
       if (res.status === 401) {
+        // Passwort serverseitig abgelehnt: Job parken (nicht verbrennen), Passwort
+        // verwerfen und das Gate zeigen. Nach erneuter Eingabe läuft der Job weiter.
+        job.status = 'auth';
         localStorage.removeItem('uploadPassword');
         showPasswordGate(true);
         return;
       }
       const result = await res.json().catch(() => ({}));
       if (!res.ok || !result.ok) throw new Error(result.error || `Server-Fehler (${res.status})`);
-
-      showResult(result);
+      job.status = 'done';
+      job.result = result;
     } catch (e) {
-      toast('❌ Fehlgeschlagen: ' + e.message);
-      document.getElementById('formCard').style.display = 'block';
-    } finally {
-      document.getElementById('spinner').style.display = 'none';
+      job.status = 'error';
+      job.error = e.message;
     }
   }
 
-  async function handleImportSelect(e) {
-    const files = Array.from(e.target.files || []);
-    e.target.value = '';
-    if (files.length === 0) return;
+  function retryJob(id) {
+    const job = jobs.find(j => j.id === id);
+    if (!job || job.status !== 'error') return;
+    job.status = 'queued';
+    job.error = null;
+    renderJobs();
+    runQueue();
+  }
 
-    const importLabel = document.getElementById('importLabel');
-    importLabel.classList.add('disabled');
+  function dismissJob(id) {
+    const job = jobs.find(j => j.id === id);
+    if (job && job.thumbUrl) URL.revokeObjectURL(job.thumbUrl);
+    jobs = jobs.filter(j => j.id !== id);
+    renderJobs();
+  }
 
-    const rows = files.map((file) => ({ file, status: 'pending' }));
-    renderImportList(rows);
+  function clearFinishedJobs() {
+    for (const j of jobs) {
+      if ((j.status === 'done' || j.status === 'error') && j.thumbUrl) URL.revokeObjectURL(j.thumbUrl);
+    }
+    jobs = jobs.filter(j => j.status !== 'done' && j.status !== 'error');
+    renderJobs();
+  }
 
-    // Sequentiell statt parallel, damit Gemini/Worker nicht ueberlastet werden
-    // und der Nutzer klares Pro-Datei-Feedback bekommt.
-    for (let i = 0; i < rows.length; i++) {
-      rows[i].status = 'processing';
-      renderImportList(rows);
-      try {
-        const form = new FormData();
-        form.append('photo', rows[i].file);
-        const res = await fetch(WORKER_URL, { method: 'POST', body: form, headers: { 'X-Upload-Password': getUploadPassword() } });
-        if (res.status === 401) {
-          localStorage.removeItem('uploadPassword');
-          importLabel.classList.remove('disabled');
-          showPasswordGate(true);
-          return;
-        }
-        const result = await res.json().catch(() => ({}));
-        if (!res.ok || !result.ok) throw new Error(result.error || `Server-Fehler (${res.status})`);
-        rows[i].status = 'done';
-        rows[i].result = result;
-      } catch (err) {
-        rows[i].status = 'error';
-        rows[i].error = err.message;
+  const STATUS_ICON = { queued: '⏳', processing: '🔄', done: '✅', error: '❌', auth: '🔒' };
+
+  function renderJobs() {
+    const card = document.getElementById('jobsCard');
+    const list = document.getElementById('jobList');
+    const count = document.getElementById('jobsCount');
+    const clearBtn = document.getElementById('jobsClear');
+
+    if (!jobs.length) { card.style.display = 'none'; list.innerHTML = ''; return; }
+    card.style.display = 'block';
+
+    const active = jobs.filter(j => j.status === 'processing' || j.status === 'queued').length;
+    const done = jobs.filter(j => j.status === 'done').length;
+    count.textContent = active ? `${active} in Arbeit` : done ? 'alle fertig' : '';
+    clearBtn.style.display = jobs.some(j => j.status === 'done' || j.status === 'error') ? 'inline' : 'none';
+
+    // Neueste zuerst anzeigen.
+    list.innerHTML = [...jobs].reverse().map(j => {
+      const icon = STATUS_ICON[j.status] || '•';
+      const iconHtml = j.status === 'processing' ? `<span class="spin">${icon}</span>` : icon;
+      const thumb = j.thumbUrl
+        ? `<img class="job-thumb" src="${j.thumbUrl}" alt="" />`
+        : '<span class="job-thumb">📄</span>';
+
+      let detail = '', detailClass = '', actions = '';
+      if (j.status === 'done' && j.result) {
+        const r = j.result;
+        const head = [r.kategorie, r.aussteller, r.betrag].filter(Boolean).map(escapeHtml).join(' · ');
+        detail = head + (r.pfad ? `<br><span style="opacity:.7">${escapeHtml(r.pfad)}</span>` : '');
+        if (r.webUrl) actions += `<a href="${encodeURI(r.webUrl)}" target="_blank" rel="noopener">In Drive öffnen ↗</a>`;
+        actions += `<button onclick="dismissJob(${j.id})">Ausblenden</button>`;
+      } else if (j.status === 'error') {
+        detail = escapeHtml(j.error || 'Fehlgeschlagen');
+        detailClass = ' error';
+        actions = `<button onclick="retryJob(${j.id})">↻ Wiederholen</button><button onclick="dismissJob(${j.id})">Verwerfen</button>`;
+      } else if (j.status === 'processing') {
+        detail = 'wird analysiert und abgelegt…';
+      } else if (j.status === 'auth') {
+        detail = 'wartet auf Passwort';
+      } else {
+        detail = 'wartet…';
       }
-      renderImportList(rows);
-    }
 
-    importLabel.classList.remove('disabled');
-  }
-
-  function renderImportList(rows) {
-    const list = document.getElementById('importList');
-    list.innerHTML = rows.map((r) => {
-      const icon = r.status === 'pending' ? '⏳' : r.status === 'processing' ? '🔄' : r.status === 'done' ? '✅' : '❌';
-      const detail = r.status === 'done' ? r.result.pfad
-        : r.status === 'error' ? r.error
-        : r.status === 'processing' ? 'wird verarbeitet…'
-        : 'wartet…';
       return `
-        <div class="import-row">
-          <span>${icon}</span>
-          <span class="import-name">${escapeHtml(r.file.name)}</span>
-          <span class="import-detail">${escapeHtml(detail)}</span>
-        </div>
-      `;
+        <div class="job-item">
+          ${thumb}
+          <div class="job-body">
+            <div class="job-title"><span class="job-status-icon">${iconHtml}</span>${escapeHtml(j.label)}</div>
+            ${detail ? `<div class="job-detail${detailClass}">${detail}</div>` : ''}
+            ${actions ? `<div class="job-actions">${actions}</div>` : ''}
+          </div>
+        </div>`;
     }).join('');
-  }
-
-  function showResult(result) {
-    const details = document.getElementById('resultDetails');
-    const rows = [
-      ['Kategorie', result.kategorie],
-      ['Aussteller', result.aussteller || '–'],
-      ['Datum', result.datum || '–'],
-      ['Betrag', result.betrag || '–'],
-      ['Abgelegt unter', result.pfad],
-    ];
-    details.innerHTML = rows.map(([label, value]) => `
-      <div class="result-row">
-        <span class="label">${escapeHtml(label)}</span>
-        <span class="value">${escapeHtml(value)}</span>
-      </div>
-    `).join('');
-    document.getElementById('successBox').style.display = 'block';
   }
 
   function escapeHtml(str) {
     return String(str ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  }
-
-  function resetForm() {
-    resetCapture();
-    document.getElementById('successBox').style.display = 'none';
-    document.getElementById('formCard').style.display = 'block';
   }
 
   function toast(msg) {
@@ -370,6 +471,15 @@
     t.classList.add('show');
     setTimeout(() => t.classList.remove('show'), 3500);
   }
+
+  // Warnen, wenn beim Verlassen/Neuladen noch Vorgänge offen sind (die laufen nur,
+  // solange die Seite geöffnet ist – Foto-Aufnahme per Kamera lässt sie offen).
+  window.addEventListener('beforeunload', (e) => {
+    if (jobs.some(j => j.status === 'processing' || j.status === 'queued')) {
+      e.preventDefault();
+      e.returnValue = '';
+    }
+  });
 
   // Initiales Gate: ohne gespeichertes Passwort erst die Passwort-Karte zeigen.
   if (getUploadPassword()) showApp(); else showPasswordGate(false);
