@@ -51,16 +51,46 @@
   }
   .toast.show { opacity: 1; transform: translateY(0); }
   .error-text { color: #b3261e; font-size: 0.85rem; margin-bottom: 12px; display: none; }
+  .version-badge {
+    font-size: 11px; font-weight: 600;
+    background: rgba(255,255,255,0.18); border: 1px solid rgba(255,255,255,0.35);
+    color: #fff; border-radius: 999px; padding: 2px 8px; vertical-align: middle;
+  }
+  .version-badge-link { cursor: pointer; }
+  .version-badge-link:hover, .version-badge-link:focus-visible { background: rgba(255,255,255,0.32); }
+  nav {
+    display: flex; gap: 4px; background: var(--white);
+    padding: 8px 24px 0; border-bottom: 1px solid var(--border);
+  }
+  nav button {
+    background: none; border: none; padding: 10px 16px;
+    font-size: 14px; font-weight: 600; color: var(--muted); cursor: pointer;
+    border-bottom: 3px solid transparent; border-radius: 8px 8px 0 0;
+  }
+  nav button:hover { background: var(--gray); }
+  nav button.active { color: var(--blue); border-bottom-color: var(--blue); }
+  .tab-section { display: none; }
+  .tab-section.active { display: block; }
+  .card .version-badge { background: var(--gray); border-color: var(--border); color: var(--blue); }
+  .changelog-entry { font-size: 14px; }
+  .changelog-entry .cv { font-weight: 700; color: var(--blue); margin-bottom: 8px; }
+  .changelog-entry ul { margin: 0; padding-left: 20px; color: var(--muted); line-height: 1.6; }
 </style>
 </head>
 <body>
 <header>
   <span class="icon">🔍</span>
-  <h1>Beleg-Suche</h1>
+  <h1>Beleg-Suche <span class="version-badge version-badge-link" id="version-badge" role="button" tabindex="0" title="Versionshistorie ansehen"></span></h1>
   <img class="header-logo" src="logo.png" alt="1. SC 1911 e.V. Heilbad Heiligenstadt" />
 </header>
 
+<nav>
+  <button data-tab="suche" class="active">Suche</button>
+  <button data-tab="info" style="margin-left:auto;">Info</button>
+</nav>
+
 <main>
+ <div class="tab-section active" id="tab-suche">
   <div class="card" id="passwordCard" style="display:none">
     <h2>🔒 Zugriff</h2>
     <p class="hint">Diese Suche zeigt deine privaten Belege - bitte Passwort eingeben.</p>
@@ -87,6 +117,21 @@
     <h2>Ergebnisse</h2>
     <div id="resultsList"></div>
   </div>
+ </div>
+
+ <div class="tab-section" id="tab-info">
+   <div class="card">
+     <h2>Über die Beleg-Suche <span class="version-badge" id="version-badge-2"></span></h2>
+     <p class="hint">
+       Durchsucht die mit dem Beleg-Scanner abgelegten Belege nach Text, Kategorie
+       und Zeitraum. Gesucht wird im erkannten Text der PDFs, nicht nur im Dateinamen.
+     </p>
+   </div>
+   <div class="card">
+     <h2>Änderungen</h2>
+     <div id="changelog-list"></div>
+   </div>
+ </div>
 </main>
 
 <div class="toast" id="toast"></div>
@@ -228,6 +273,41 @@
   } else {
     document.getElementById('passwordCard').style.display = 'block';
   }
+
+  // --- Version / Info-Tab -----------------------------------------------------
+  const APP_VERSION = '1.0';
+  const APP_CHANGELOG = [
+    { version: '1.0', groups: [
+      { title: 'Suchen', items: [
+        'Volltextsuche im erkannten Text der abgelegten Belege, nicht nur im Dateinamen.',
+        'Nach Kategorie und Zeitraum eingrenzen.',
+        'Treffer direkt als PDF öffnen.'
+      ]},
+      { title: 'Zugriff', items: [
+        'Passwortgeschützt, das Passwort wird nur auf diesem Gerät gemerkt.'
+      ]}
+    ]}
+  ];
+  function activateTab(name) {
+    document.querySelectorAll('nav button[data-tab]').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
+    document.querySelectorAll('.tab-section').forEach(sec => sec.classList.toggle('active', sec.id === 'tab-' + name));
+  }
+  (function setupInfoTab() {
+    document.querySelectorAll('#version-badge, #version-badge-2').forEach(el => { el.textContent = 'v' + APP_VERSION; });
+    document.getElementById('changelog-list').innerHTML = APP_CHANGELOG.map(e => `
+      <div class="changelog-entry">
+        <div class="cv">Version ${e.version}</div>
+        ${e.groups.map(g => `<ul>${g.items.map(i => `<li>${i}</li>`).join('')}</ul>`).join('')}
+      </div>`).join('');
+    document.querySelectorAll('nav button[data-tab]').forEach(b => {
+      b.addEventListener('click', () => activateTab(b.dataset.tab));
+    });
+    const badge = document.getElementById('version-badge');
+    badge.addEventListener('click', () => activateTab('info'));
+    badge.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); activateTab('info'); }
+    });
+  })();
 </script>
 </body>
 </html>
