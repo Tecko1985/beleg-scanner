@@ -21,7 +21,7 @@
 
 import { CATEGORIES, FALLBACK_CATEGORY, isValidCategory } from './categories.js';
 import { buildSearchablePdf } from './pdf.js';
-import { uploadDocument, searchDocuments } from './storage/google-drive.js';
+import { uploadDocument, searchDocuments, driveQuota } from './storage/google-drive.js';
 
 const ALLOWED_ORIGIN = '*'; // Anpassen, sobald die Scan-Seite ein festes Hosting hat (siehe README)
 const MAX_FILE_BYTES = 15 * 1024 * 1024; // 15 MB pro Einzeldatei (Foto oder PDF)
@@ -103,7 +103,33 @@ function geminiRetryDelay(res, attempt) {
   return Math.min(Math.max(retryAfter * 1000, fallback), 8000);
 }
 
-async function analyzeWithGemini(env, parts) {
+// Meldet den Gemini-Token-Verbrauch ans API-Dashboard. Google bietet fuer die
+// Generative Language API keinen Verbrauchs-Endpunkt an - usageMetadata aus der
+// Antwort ist die einzige Quelle, und sie wurde bisher verworfen. Laeuft ueber
+// ein Service Binding (ein direkter fetch() auf einen anderen Worker scheitert
+// an Error 1042) und traegt ein Geheimnis, weil die Dashboard-URL oeffentlich
+// erreichbar ist.
+async function meldeNutzung(env, usage) {
+  if (!env.USAGE || !env.USAGE_INGEST_SECRET) return;
+  try {
+    await env.USAGE.fetch('https://api-dashboard.michel-brunner.workers.dev', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'usage-melden',
+        secret: env.USAGE_INGEST_SECRET,
+        quelle: 'gemini-beleg-scanner',
+        calls: 1,
+        promptTokens: Number(usage?.promptTokenCount) || 0,
+        outputTokens: Number(usage?.candidatesTokenCount) || 0,
+      }),
+    });
+  } catch (err) {
+    console.warn('Nutzungsmeldung fehlgeschlagen:', err.message);
+  }
+}
+
+async function analyzeWithGemini(env, parts, ctx) {
   const prompt = buildAnalysisPrompt(parts);
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${env.GEMINI_API_KEY}`;
@@ -139,6 +165,9 @@ async function analyzeWithGemini(env, parts) {
     await new Promise((resolve) => setTimeout(resolve, geminiRetryDelay(res, attempt)));
   }
   const data = await res.json();
+  // Nicht blockierend: eine fehlgeschlagene Zaehlung darf einen erfolgreich
+  // analysierten Beleg nie kippen.
+  ctx?.waitUntil(meldeNutzung(env, data.usageMetadata));
   const text = data.candidates?.[0]?.content?.parts?.find(p => p.text)?.text;
   if (!text) throw new Error('Gemini-Antwort enthielt keinen Text-Block');
 
@@ -201,7 +230,7 @@ async function handleSearch(request, env, url) {
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     if (request.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: corsHeaders() });
     }
@@ -209,6 +238,19 @@ export default {
     const url = new URL(request.url);
     if (request.method === 'GET' && url.pathname === '/search') {
       return handleSearch(request, env, url);
+    }
+    // Speicher-Kontingent fuers API-Dashboard. Eigener Zugang ueber
+    // USAGE_INGEST_SECRET statt des Upload-Passworts: der Aufrufer ist ein
+    // anderer Worker, kein Mensch, und darf ausschliesslich lesen.
+    if (request.method === 'POST' && url.pathname === '/drive-quota') {
+      if (!env.USAGE_INGEST_SECRET || request.headers.get('X-Usage-Secret') !== env.USAGE_INGEST_SECRET) {
+        return jsonResponse({ ok: false, error: 'Nicht berechtigt.' }, 403);
+      }
+      try {
+        return jsonResponse({ ok: true, drive: await driveQuota(env) });
+      } catch (err) {
+        return jsonResponse({ ok: false, error: err.message }, 502);
+      }
     }
     if (request.method !== 'POST') {
       return new Response('Method not allowed', { status: 405, headers: corsHeaders() });
@@ -261,7 +303,7 @@ export default {
       const mimeType = isPdfImport ? 'application/pdf' : 'image/jpeg';
       const parts = byteArrays.map((bytes) => ({ mimeType, base64: bytesToBase64(bytes) }));
 
-      const analysis = await analyzeWithGemini(env, parts);
+      const analysis = await analyzeWithGemini(env, parts, ctx);
 
       // Eine digitale PDF ist bereits durchsuchbar - kein Neubau, Original-Bytes 1:1 hochladen.
       // Foto(s) werden wie bisher zu einer durchsuchbaren PDF (1 Seite pro Foto) zusammengebaut.

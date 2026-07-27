@@ -292,4 +292,24 @@ async function searchDocuments(env, { q, kategorie, jahr }) {
   return candidates.map((f) => toResult(f, '', ''));
 }
 
-export { uploadDocument, searchDocuments };
+// Speicherbelegung des Drive-Kontos, nur lesend. Damit muss das API-Dashboard
+// die Google-OAuth-Zugangsdaten nicht ein zweites Mal vorhalten - der
+// Refresh-Token bleibt allein hier.
+async function driveQuota(env) {
+  const accessToken = await getAccessToken(env);
+  const res = await fetch('https://www.googleapis.com/drive/v3/about?fields=storageQuota', {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!res.ok) throw new Error(`Drive-Kontingent nicht abrufbar (${res.status})`);
+  const q = (await res.json()).storageQuota || {};
+  // limit fehlt bei unbegrenztem Speicher - dann bleibt das Kontingent null.
+  const limit = q.limit == null ? null : Number(q.limit);
+  const used = Number(q.usage) || 0;
+  return {
+    usedBytes: used,
+    totalBytes: Number.isFinite(limit) ? limit : null,
+    availableBytes: Number.isFinite(limit) ? Math.max(0, limit - used) : null,
+  };
+}
+
+export { uploadDocument, searchDocuments, driveQuota };
