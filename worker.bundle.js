@@ -596,28 +596,59 @@ function buildAnalysisPrompt(parts) {
   );
 }
 
+// Gemini weist bei Kapazitaetsengpaessen mit 503 ("high demand") ab - laut Google ein
+// voruebergehender Zustand, den der Client durch Wiederholen ueberbruecken soll. Ohne
+// das verbrennt ein Sekunden-Wackler den kompletten Beleg, und der kostenlose Tier wird
+// bei Engpaessen zuerst abgewiesen. Bewusst knapp gehalten (max. ~10s zusaetzlich): der
+// Upload laeuft ohnehin schon 30-60s, und die Warteschlange im Frontend arbeitet die
+// Belege nacheinander ab - jede Wartezeit hier verzoegert auch alle folgenden.
+const GEMINI_RETRY_STATUS = new Set([429, 500, 502, 503, 504]);
+const GEMINI_RETRY_DELAYS_MS = [1500, 3000, 6000];
+
+// Google schickt bei 429 gelegentlich ein Retry-After (in Sekunden) - respektieren,
+// aber nach oben deckeln, damit ein grosszuegiger Wert den Request nicht ins
+// Verbindungs-Timeout laufen laesst.
+function geminiRetryDelay(res, attempt) {
+  const fallback = GEMINI_RETRY_DELAYS_MS[attempt];
+  const retryAfter = Number(res.headers.get('retry-after'));
+  if (!Number.isFinite(retryAfter) || retryAfter <= 0) return fallback;
+  return Math.min(Math.max(retryAfter * 1000, fallback), 8000);
+}
+
 async function analyzeWithGemini(env, parts) {
   const prompt = buildAnalysisPrompt(parts);
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${env.GEMINI_API_KEY}`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [
-        {
-          parts: [
-            ...parts.map((p) => ({ inline_data: { mime_type: p.mimeType, data: p.base64 } })),
-            { text: prompt },
-          ],
-        },
-      ],
-      generationConfig: { response_mime_type: 'application/json' },
-    }),
+  const body = JSON.stringify({
+    contents: [
+      {
+        parts: [
+          ...parts.map((p) => ({ inline_data: { mime_type: p.mimeType, data: p.base64 } })),
+          { text: prompt },
+        ],
+      },
+    ],
+    generationConfig: { response_mime_type: 'application/json' },
   });
-  if (!res.ok) {
-    const detail = await res.text().catch(() => '');
-    throw new Error(`Gemini-Vision-Aufruf fehlgeschlagen (${res.status}): ${detail}`);
+
+  let res;
+  for (let attempt = 0; ; attempt++) {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+    });
+    if (res.ok) break;
+    // Alles ausserhalb der Kapazitaets-Codes (400 kaputter Request, 403 Key, 404 Modell)
+    // wird durch Warten nicht besser - sofort durchreichen.
+    if (!GEMINI_RETRY_STATUS.has(res.status) || attempt >= GEMINI_RETRY_DELAYS_MS.length) {
+      const detail = await res.text().catch(() => '');
+      const versuche = attempt + 1;
+      throw new Error(
+        `Gemini-Vision-Aufruf fehlgeschlagen (${res.status}) nach ${versuche} Versuch${versuche === 1 ? '' : 'en'}: ${detail}`
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, geminiRetryDelay(res, attempt)));
   }
   const data = await res.json();
   const text = data.candidates?.[0]?.content?.parts?.find(p => p.text)?.text;
