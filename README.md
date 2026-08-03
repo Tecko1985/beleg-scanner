@@ -3,7 +3,7 @@
 Foto vom Handy → Google Gemini (kostenloser Tier) analysiert & kategorisiert → durchsuchbares PDF
 → landet automatisch im richtigen Ordner in Google Drive.
 
-**Live:** https://tecko1985.github.io/beleg-scanner/ (Scan-Seite), [.../search.html](https://tecko1985.github.io/beleg-scanner/search.html) (Suche)
+**Live:** https://sc1911heiligenstadt.github.io/beleg-scanner/ (Scan-Seite), [.../search.html](https://sc1911heiligenstadt.github.io/beleg-scanner/search.html) (Suche)
 
 ## Struktur
 
