@@ -101,8 +101,6 @@
     background: rgba(255,255,255,0.18); border: 1px solid rgba(255,255,255,0.35);
     color: #fff; border-radius: 999px; padding: 2px 8px; vertical-align: middle;
   }
-  .version-badge-link { cursor: pointer; }
-  .version-badge-link:hover, .version-badge-link:focus-visible { background: rgba(255,255,255,0.32); }
   nav {
     display: flex; gap: 4px; background: var(--white);
     padding: 8px 24px 0; border-bottom: 1px solid var(--border);
@@ -127,7 +125,7 @@
 <div class="dashboard-bar"><a href="https://sc1911heiligenstadt.github.io/ToolsUebersicht/" class="back-to-dashboard">← Zurück zum Dashboard</a></div>
 <header>
   <span class="icon">📄</span>
-  <h1>Beleg scannen <span class="version-badge version-badge-link" id="version-badge" role="button" tabindex="0" title="Versionshistorie ansehen"></span></h1>
+  <h1>Beleg scannen</h1>
   <a href="search.html" style="margin-left:auto;color:white;text-decoration:none;font-size:1.4rem" title="Belege durchsuchen">🔍</a>
   <img class="header-logo" src="logo.png" alt="1. SC 1911 e.V. Heilbad Heiligenstadt" />
 </header>
@@ -597,13 +595,6 @@
   document.querySelectorAll('nav button[data-tab]').forEach(b => {
     b.addEventListener('click', () => activateTab(b.dataset.tab));
   });
-  (() => {
-    const badge = document.getElementById('version-badge');
-    badge.addEventListener('click', () => activateTab('info'));
-    badge.addEventListener('keydown', e => {
-      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); activateTab('info'); }
-    });
-  })();
   renderVersionInfo();
 
   // Initiales Gate: ohne gespeichertes Passwort erst die Passwort-Karte zeigen.
