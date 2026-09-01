@@ -2,7 +2,7 @@
 
 Belege abfotografieren, den Inhalt automatisch auslesen und als durchsuchbares PDF ablegen.
 
-**➡️ [Beleg scannen öffnen](https://sc1911heiligenstadt.github.io/beleg-scanner/)**
+**➡️ [Beleg scannen öffnen](https://tecko1985.github.io/beleg-scanner/)**
 
 > Steht bewusst nicht mehr auf der Kachelübersicht.
 
@@ -10,9 +10,9 @@ Belege abfotografieren, den Inhalt automatisch auslesen und als durchsuchbares P
 
 | Seite | Wofür |
 |---|---|
-| [Beleg scannen](https://sc1911heiligenstadt.github.io/beleg-scanner/) | Beleg abfotografieren, auslesen und ablegen |
-| [Beleg-Suche](https://sc1911heiligenstadt.github.io/beleg-scanner/search.html) | Abgelegte Belege durchsuchen |
-| [PDF-Testwerkzeug](https://sc1911heiligenstadt.github.io/beleg-scanner/test-pdf.html) | Testwerkzeug für die PDF-Anzeige — kein Teil der eigentlichen App |
+| [Beleg scannen](https://tecko1985.github.io/beleg-scanner/) | Beleg abfotografieren, auslesen und ablegen |
+| [Beleg-Suche](https://tecko1985.github.io/beleg-scanner/search.html) | Abgelegte Belege durchsuchen |
+| [PDF-Testwerkzeug](https://tecko1985.github.io/beleg-scanner/test-pdf.html) | Testwerkzeug für die PDF-Anzeige — kein Teil der eigentlichen App |
 
 ## Zugang
 
