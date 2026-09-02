@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8" />
+<title>pdf.js Testharness</title>
+</head>
+<body>
+<h1>Test: durchsuchbares PDF erzeugen</h1>
+<p>Manuelles Test-Tool fuer pdf.js (kein Teil der eigentlichen App). Bild waehlen,
+Text eingeben, PDF wird unten als Vorschau eingebettet + Download-Link.</p>
+<input type="file" id="imgInput" accept="image/jpeg" />
+<br /><br />
+<textarea id="textInput" rows="4" cols="60">Testfirma GmbH
+Rechnung Nr. 12345
+Datum: 24.06.2026
+Betrag: 199,99 EUR
+Beschreibung: Mauspad und Kabel Ä Ö Ü ä ö ü ß €</textarea>
+<br /><br />
+<button id="goBtn">PDF erzeugen</button>
+<p id="status"></p>
+<a id="dlLink" download="test.pdf" style="display:none">PDF herunterladen</a>
+<iframe id="preview" style="width:100%;height:600px;border:1px solid #ccc;margin-top:10px;display:none"></iframe>
+
+<script type="module">
+  import { buildSearchablePdf } from './pdf.js';
+
+  document.getElementById('goBtn').addEventListener('click', async () => {
+    const status = document.getElementById('status');
+    const fileInput = document.getElementById('imgInput');
+    const file = fileInput.files[0];
+    if (!file) { status.textContent = 'Bitte zuerst ein JPEG auswaehlen.'; return; }
+    status.textContent = 'Verarbeite...';
+    try {
+      const jpegBytes = new Uint8Array(await file.arrayBuffer());
+      const text = document.getElementById('textInput').value;
+      const pdfBytes = buildSearchablePdf(jpegBytes, text);
+      const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+      const url = URL.createObjectURL(blob);
+      const dl = document.getElementById('dlLink');
+      dl.href = url;
+      dl.style.display = 'inline';
+      const frame = document.getElementById('preview');
+      frame.src = url;
+      frame.style.display = 'block';
+      status.textContent = `OK - PDF Groesse: ${pdfBytes.length} Bytes`;
+    } catch (err) {
+      status.textContent = 'Fehler: ' + err.message;
+      console.error(err);
+    }
+  });
+</script>
+</body>
+</html>

@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>🔍 Beleg-Suche</title>
+<style>
+  :root {
+    --blue: #1a56a0;
+    --green: #2d8c4e;
+    --gray: #f4f5f7;
+    --border: #dde1e8;
+    --text: #1e2330;
+    --muted: #6b7280;
+    --white: #ffffff;
+    --shadow: 0 2px 12px rgba(0,0,0,0.08);
+    --radius: 12px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', system-ui, sans-serif; background: #eef1f6; color: var(--text); min-height: 100vh; }
+  header { background: var(--blue); color: white; padding: 18px 24px; display: flex; align-items: center; gap: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); }
+  header span.icon { font-size: 1.6rem; }
+  header h1 { font-size: 1.2rem; font-weight: 700; }
+  .header-logo { height: 40px; width: auto; display: block; margin-left: auto; }
+  main { max-width: 560px; margin: 0 auto; padding: 24px 20px; }
+  .card { background: var(--white); border-radius: var(--radius); box-shadow: var(--shadow); padding: 22px; margin-bottom: 18px; }
+  .card h2 { font-size: 1rem; margin-bottom: 6px; }
+  .card p.hint { font-size: 0.85rem; color: var(--muted); line-height: 1.5; margin-bottom: 14px; }
+  .btn { border: none; border-radius: 8px; padding: 14px 20px; font-size: 1rem; font-weight: 700; cursor: pointer; width: 100%; display: inline-flex; align-items: center; justify-content: center; gap: 8px; transition: opacity 0.15s; }
+  .btn:hover { opacity: 0.88; }
+  .btn:disabled { opacity: 0.6; cursor: not-allowed; }
+  .btn-blue { background: var(--blue); color: white; }
+  input[type="text"], input[type="password"], select {
+    width: 100%; padding: 12px 14px; border: 1px solid var(--border); border-radius: 8px; font-size: 1rem;
+    margin-bottom: 12px; font-family: inherit;
+  }
+  .filter-row { display: flex; gap: 10px; }
+  .filter-row select { flex: 1; }
+  .result-row { display: flex; justify-content: space-between; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--border); font-size: 0.9rem; }
+  .result-row:last-child { border-bottom: none; }
+  .result-row .info { display: flex; flex-direction: column; gap: 2px; }
+  .result-row .name { font-weight: 600; }
+  .result-row .meta { color: var(--muted); font-size: 0.8rem; }
+  .result-row a { color: var(--blue); font-weight: 700; text-decoration: none; white-space: nowrap; align-self: center; }
+  .spinner { display: none; text-align: center; padding: 20px 0; color: var(--muted); }
+  .empty-state { text-align: center; padding: 20px 0; color: var(--muted); font-size: 0.9rem; display: none; }
+  .toast {
+    position: fixed; bottom: 24px; right: 24px; left: 24px; background: var(--text); color: white; padding: 14px 18px;
+    border-radius: 10px; font-size: 0.9rem; font-weight: 600; box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+    opacity: 0; transform: translateY(10px); transition: all 0.3s; z-index: 999; text-align: center;
+  }
+  .toast.show { opacity: 1; transform: translateY(0); }
+  .error-text { color: #b3261e; font-size: 0.85rem; margin-bottom: 12px; display: none; }
+  .version-badge {
+    font-size: 11px; font-weight: 600;
+    background: rgba(255,255,255,0.18); border: 1px solid rgba(255,255,255,0.35);
+    color: #fff; border-radius: 999px; padding: 2px 8px; vertical-align: middle;
+  }
+  nav {
+    display: flex; gap: 4px; background: var(--white);
+    padding: 8px 24px 0; border-bottom: 1px solid var(--border);
+  }
+  nav button {
+    background: none; border: none; padding: 10px 16px;
+    font-size: 14px; font-weight: 600; color: var(--muted); cursor: pointer;
+    border-bottom: 3px solid transparent; border-radius: 8px 8px 0 0;
+  }
+  nav button:hover { background: var(--gray); }
+  nav button.active { color: var(--blue); border-bottom-color: var(--blue); }
+  .tab-section { display: none; }
+  .tab-section.active { display: block; }
+  .card .version-badge { background: var(--gray); border-color: var(--border); color: var(--blue); }
+  .changelog-entry { font-size: 14px; }
+  .changelog-entry .cv { font-weight: 700; color: var(--blue); margin-bottom: 8px; }
+  .changelog-entry ul { margin: 0; padding-left: 20px; color: var(--muted); line-height: 1.6; }
+</style>
+</head>
+<body>
+<header>
+  <span class="icon">🔍</span>
+  <h1>Beleg-Suche</h1>
+  <img class="header-logo" src="https://sc1911heiligenstadt.github.io/logo.svg" alt="1. SC 1911 Heiligenstadt e.V." />
+</header>
+
+<nav>
+  <button data-tab="suche" class="active">Suche</button>
+  <button data-tab="info" style="margin-left:auto;">Info</button>
+</nav>
+
+<main>
+ <div class="tab-section active" id="tab-suche">
+  <div class="card" id="passwordCard" style="display:none">
+    <h2>🔒 Zugriff</h2>
+    <p class="hint">Diese Suche zeigt deine privaten Belege - bitte Passwort eingeben.</p>
+    <div class="error-text" id="passwordError">Falsches Passwort.</div>
+    <input type="password" id="searchPassword" placeholder="Passwort" onkeydown="if(event.key==='Enter')onPasswordSubmit()" />
+    <button class="btn btn-blue" onclick="onPasswordSubmit()">Weiter</button>
+  </div>
+
+  <div class="card" id="searchCard" style="display:none">
+    <h2>Suche</h2>
+    <p class="hint">Freitext durchsucht Dateiname und erkannten Inhalt. Filter sind optional kombinierbar.</p>
+    <input type="text" id="searchQuery" placeholder="Suchbegriff (Aussteller, Inhalt, ...)" onkeydown="if(event.key==='Enter')runSearch()" />
+    <div class="filter-row">
+      <select id="kategorieFilter"></select>
+      <select id="jahrFilter"></select>
+    </div>
+    <button class="btn btn-blue" onclick="runSearch()">🔍 Suchen</button>
+  </div>
+
+  <div class="spinner" id="spinner">⏳ Suche läuft…</div>
+  <div class="empty-state" id="emptyState">Keine Treffer.</div>
+
+  <div class="card" id="resultsCard" style="display:none">
+    <h2>Ergebnisse</h2>
+    <div id="resultsList"></div>
+  </div>
+ </div>
+
+ <div class="tab-section" id="tab-info">
+   <div class="card">
+     <h2>Über die Beleg-Suche <span class="version-badge" id="version-badge-2"></span></h2>
+     <p class="hint">
+       Durchsucht die mit dem Beleg-Scanner abgelegten Belege nach Text, Kategorie
+       und Zeitraum. Gesucht wird im erkannten Text der PDFs, nicht nur im Dateinamen.
+     </p>
+   </div>
+   <div class="card">
+     <h2>Änderungen</h2>
+     <div id="changelog-list"></div>
+   </div>
+ 
+      <div class="card" id="ds-info-karte">
+        <h2>Datenschutz</h2>
+        <p>Dieses Werkzeug gehört zu den internen Anwendungen des
+        1. SC 1911 Heiligenstadt. Die hier erfassten Daten werden
+        ausschließlich für die Vereinsarbeit verwendet.
+        Eine Weitergabe an Dritte findet nur statt, soweit sie für den
+        jeweiligen Zweck erforderlich oder gesetzlich vorgeschrieben ist.</p>
+        <p><strong>Die Belege liegen in einem Google-Drive-Ordner des
+        Vereins</strong>, nicht auf einem Vereinsserver — auch beim Suchen und
+        Herunterladen kommen sie von dort. Eine Übermittlung in Länder außerhalb
+        der EU ist dabei nicht ausgeschlossen.</p>
+        <p><strong>Wie lange:</strong> Belege sind Buchführungsunterlagen und
+        werden nach § 147 Abgabenordnung sechs bzw. zehn Jahre aufbewahrt.</p>
+        <p>Verantwortlich ist der 1. SC 1911 Heiligenstadt, Leineberg 2,
+        37308 Heilbad Heiligenstadt, Telefon 03606 612206,
+        <a href="mailto:info@sc1911-heiligenstadt.de">info@sc1911-heiligenstadt.de</a>.
+        Auskunft, Berichtigung, Löschung, Einschränkung der Verarbeitung,
+        Datenübertragbarkeit und Widerspruch lassen sich unter dieser
+        Anschrift geltend machen. Beschwerden nimmt der Thüringer
+        Landesbeauftragte für den Datenschutz und die Informationsfreiheit
+        entgegen.</p>
+        <p><a href="https://www.sc1911-heiligenstadt.de/datenschutz/" target="_blank" rel="noopener">Datenschutzerklärung des Vereins</a>
+        &middot;
+        <a href="https://www.sc1911-heiligenstadt.de/impressum-2/" target="_blank" rel="noopener">Impressum</a></p>
+      </div>
+</div>
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script>
+  // Gleicher Worker wie index.html, neue GET /search-Route (siehe worker.js).
+  // Muss bei einem Worker-Domain-Wechsel an beiden Stellen aktualisiert werden.
+  const WORKER_URL = 'https://beleg-scanner.michel-brunner.workers.dev/';
+
+  // Bewusste Kopie von categories.js - kein Import, um die statische Seite nicht an
+  // einen festen relativen Pfad zu binden. Bei Aenderungen in categories.js hier nachziehen.
+  const CATEGORIES = [
+    'Rechnungen/Hardware-Rechner',
+    'Rechnungen/Software-Lizenzen',
+    'Rechnungen/Telekommunikation',
+    'Rechnungen/Versicherungen',
+    'Rechnungen/Energie',
+    'Rechnungen/KFZ',
+    'Rechnungen/Gesundheit',
+    'Belege/Sonstiges',
+    'Notar',
+    'Vertraege',
+    'Steuern-Finanzamt',
+    'Sonstiges',
+  ];
+
+  function getStoredPassword() {
+    return sessionStorage.getItem('searchPassword') || '';
+  }
+
+  function populateFilters() {
+    const kategorieSelect = document.getElementById('kategorieFilter');
+    kategorieSelect.innerHTML = '<option value="">Alle Kategorien</option>' +
+      CATEGORIES.map((c) => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
+
+    const jahrSelect = document.getElementById('jahrFilter');
+    const currentYear = new Date().getFullYear();
+    let yearOptions = '<option value="">Alle Jahre</option>';
+    for (let y = currentYear; y >= currentYear - 5; y--) {
+      yearOptions += `<option value="${y}">${y}</option>`;
+    }
+    jahrSelect.innerHTML = yearOptions;
+  }
+
+  function onPasswordSubmit() {
+    const pw = document.getElementById('searchPassword').value;
+    if (!pw) return;
+    sessionStorage.setItem('searchPassword', pw);
+    document.getElementById('passwordError').style.display = 'none';
+    runSearch();
+  }
+
+  async function runSearch() {
+    const pw = getStoredPassword();
+    if (!pw) {
+      document.getElementById('passwordCard').style.display = 'block';
+      document.getElementById('searchCard').style.display = 'none';
+      return;
+    }
+
+    document.getElementById('searchCard').style.display = 'block';
+    document.getElementById('resultsCard').style.display = 'none';
+    document.getElementById('emptyState').style.display = 'none';
+    document.getElementById('spinner').style.display = 'block';
+
+    const q = document.getElementById('searchQuery').value.trim();
+    const kategorie = document.getElementById('kategorieFilter').value;
+    const jahr = document.getElementById('jahrFilter').value;
+
+    const params = new URLSearchParams();
+    if (q) params.set('q', q);
+    if (kategorie) params.set('kategorie', kategorie);
+    if (jahr) params.set('jahr', jahr);
+
+    try {
+      const res = await fetch(`${WORKER_URL}search?${params}`, {
+        headers: { 'X-Search-Password': pw },
+      });
+
+      if (res.status === 401) {
+        sessionStorage.removeItem('searchPassword');
+        document.getElementById('passwordCard').style.display = 'block';
+        document.getElementById('passwordError').style.display = 'block';
+        document.getElementById('searchCard').style.display = 'none';
+        return;
+      }
+
+      const result = await res.json().catch(() => ({}));
+      if (!res.ok || !result.ok) throw new Error(result.error || `Server-Fehler (${res.status})`);
+
+      document.getElementById('passwordCard').style.display = 'none';
+      document.getElementById('searchCard').style.display = 'block';
+      renderResults(result.results || []);
+    } catch (e) {
+      toast('❌ Fehlgeschlagen: ' + e.message);
+    } finally {
+      document.getElementById('spinner').style.display = 'none';
+    }
+  }
+
+  function renderResults(results) {
+    if (results.length === 0) {
+      document.getElementById('emptyState').style.display = 'block';
+      document.getElementById('resultsCard').style.display = 'none';
+      return;
+    }
+
+    const list = document.getElementById('resultsList');
+    list.innerHTML = results.map((r) => {
+      const meta = [r.kategorie, r.jahr, r.createdTime ? r.createdTime.slice(0, 10) : '']
+        .filter(Boolean).join(' · ');
+      return `
+        <div class="result-row">
+          <div class="info">
+            <span class="name">${escapeHtml(r.name)}</span>
+            <span class="meta">${escapeHtml(meta)}</span>
+          </div>
+          <a href="${escapeHtml(r.webUrl)}" target="_blank" rel="noopener">📂 Öffnen</a>
+        </div>
+      `;
+    }).join('');
+    document.getElementById('resultsCard').style.display = 'block';
+  }
+
+  function escapeHtml(str) {
+    return String(str ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  function toast(msg) {
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.classList.add('show');
+    setTimeout(() => t.classList.remove('show'), 3500);
+  }
+
+  populateFilters();
+  if (getStoredPassword()) {
+    document.getElementById('searchCard').style.display = 'block';
+  } else {
+    document.getElementById('passwordCard').style.display = 'block';
+  }
+
+  // --- Version / Info-Tab -----------------------------------------------------
+  const APP_VERSION = '1.0';
+  const APP_CHANGELOG = [
+    { version: '1.0', groups: [
+      { title: 'Suchen', items: [
+        'Volltextsuche im erkannten Text der abgelegten Belege, nicht nur im Dateinamen.',
+        'Nach Kategorie und Zeitraum eingrenzen.',
+        'Treffer direkt als PDF öffnen.'
+      ]},
+      { title: 'Zugriff', items: [
+        'Passwortgeschützt, das Passwort wird nur auf diesem Gerät gemerkt.'
+      ]}
+    ]}
+  ];
+  function activateTab(name) {
+    document.querySelectorAll('nav button[data-tab]').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
+    document.querySelectorAll('.tab-section').forEach(sec => sec.classList.toggle('active', sec.id === 'tab-' + name));
+  }
+  (function setupInfoTab() {
+    document.querySelectorAll('#version-badge, #version-badge-2').forEach(el => { el.textContent = 'v' + APP_VERSION; });
+    document.getElementById('changelog-list').innerHTML = APP_CHANGELOG.map(e => `
+      <div class="changelog-entry">
+        <div class="cv">Version ${e.version}</div>
+        ${e.groups.map(g => `<ul>${g.items.map(i => `<li>${i}</li>`).join('')}</ul>`).join('')}
+      </div>`).join('');
+    document.querySelectorAll('nav button[data-tab]').forEach(b => {
+      b.addEventListener('click', () => activateTab(b.dataset.tab));
+    });
+  })();
+</script>
+</body>
+</html>
