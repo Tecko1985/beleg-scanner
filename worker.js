@@ -189,12 +189,14 @@ async function handleSearch(request, env, url) {
   }
 
   try {
-    const results = await searchDocuments(env, {
+    const { results, abgeschnitten } = await searchDocuments(env, {
       q: url.searchParams.get('q') || '',
       kategorie: url.searchParams.get('kategorie') || '',
       jahr: url.searchParams.get('jahr') || '',
     });
-    return jsonResponse({ ok: true, results });
+    // abgeschnitten = der Seiten-Deckel wurde erreicht, es gibt mehr. Die Suchseite
+    // muss das sagen duerfen, sonst sieht eine halbe Liste aus wie eine ganze.
+    return jsonResponse({ ok: true, results, abgeschnitten });
   } catch (err) {
     return jsonResponse({ ok: false, error: err.message }, 500);
   }

@@ -152,39 +152,64 @@ async function findFolderByPath(accessToken, segments) {
   return parentId;
 }
 
-async function queryDrive(accessToken, q, pageSize = 100) {
+// Eine Drive-Antwort ist EINE Seite. Wer den nextPageToken wegwirft, sieht ab
+// dem 101. Dokument im Ordner nichts mehr - und weil Nicht-Volltext-Abfragen nach
+// createdTime desc sortiert sind, fallen immer die AELTESTEN heraus. Deshalb wird
+// geblaettert, mit hartem Deckel gegen eine Endlosschleife und gegen die
+// Subrequest-Grenze des Workers. Wird der Deckel erreicht, sagt das Ergebnis das
+// ausdruecklich (abgeschnitten) - eine unvollstaendige Trefferliste darf nicht wie
+// eine vollstaendige aussehen.
+const MAX_SEITEN = 10;
+const SEITEN_GROESSE = 100;
+
+async function queryDrive(accessToken, q, pageSize = SEITEN_GROESSE, maxSeiten = MAX_SEITEN) {
   // Drive verbietet orderBy bei fullText-Queries (Ergebnisse sind dann immer nach Relevanz sortiert).
   const orderBy = q.includes('fullText') ? '' : '&orderBy=createdTime desc';
-  const url = `${DRIVE_BASE}/files?q=${encodeURIComponent(q)}&fields=files(id,name,createdTime,webViewLink,parents)&pageSize=${pageSize}${orderBy}`;
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
-  if (!res.ok) {
-    const detail = await res.text().catch(() => '');
-    throw new Error(`Google-Drive-Suche fehlgeschlagen (${res.status}): ${detail}`);
+  const files = [];
+  let pageToken = '';
+  let seiten = 0;
+  while (seiten < maxSeiten) {
+    const weiter = pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : '';
+    const url = `${DRIVE_BASE}/files?q=${encodeURIComponent(q)}&fields=nextPageToken,files(id,name,createdTime,webViewLink,parents)&pageSize=${pageSize}${orderBy}${weiter}`;
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '');
+      throw new Error(`Google-Drive-Suche fehlgeschlagen (${res.status}): ${detail}`);
+    }
+    const data = await res.json();
+    for (const f of (data.files ?? [])) files.push(f);
+    seiten += 1;
+    pageToken = data.nextPageToken || '';
+    if (!pageToken) break;
   }
-  const data = await res.json();
-  return data.files ?? [];
+  return { files, abgeschnitten: !!pageToken };
 }
 
 // Sucht innerhalb von scopeQ (Ordner-/Trash-/Mimetype-Bedingungen ohne Textfilter) nach q.
 // Kombiniert zwei Strategien, weil Drive's eigene Operatoren keine echte Teilstring-Suche
 // im Dateinamen bieten: "name contains 'x'" matched nur GANZE Tokens (z.B. findet "wiese"
 // nicht "Wiesemann"). Deshalb zusaetzlich client-seitig per String.includes() auf den
-// Dateinamen aller Kandidaten im Scope filtern und mit den Drive-fullText-Treffern
+// Dateinamen der Kandidaten im Scope filtern und mit den Drive-fullText-Treffern
 // (deckt den erkannten Dokument-Inhalt ab) ueber die Datei-ID zusammenfuehren.
+//
+// "Alle Kandidaten im Scope" stimmt bis zum Deckel MAX_SEITEN * SEITEN_GROESSE.
+// Der frueher hier fest verdrahtete pageSize=200 war KEIN Deckel von 200 Kandidaten,
+// sondern der einzige Blick auf die 200 neuesten Dateien - alles Aeltere war ueber
+// den Dateinamen unauffindbar, ohne dass es jemand gemerkt haette.
 async function searchWithinScope(accessToken, scopeQ, q) {
   if (!q) return queryDrive(accessToken, scopeQ);
 
   const escaped = escapeForQuery(q);
-  const [fullTextHits, allInScope] = await Promise.all([
+  const [volltext, imScope] = await Promise.all([
     queryDrive(accessToken, `${scopeQ} and fullText contains '${escaped}'`),
-    queryDrive(accessToken, scopeQ, 200),
+    queryDrive(accessToken, scopeQ),
   ]);
   const needle = q.toLowerCase();
-  const nameHits = allInScope.filter((f) => f.name.toLowerCase().includes(needle));
+  const nameHits = imScope.files.filter((f) => f.name.toLowerCase().includes(needle));
 
   const byId = new Map();
-  for (const f of [...fullTextHits, ...nameHits]) byId.set(f.id, f);
-  return Array.from(byId.values());
+  for (const f of [...volltext.files, ...nameHits]) byId.set(f.id, f);
+  return { files: Array.from(byId.values()), abgeschnitten: volltext.abgeschnitten || imScope.abgeschnitten };
 }
 
 async function getFolderMeta(accessToken, folderId) {
@@ -216,22 +241,25 @@ async function resolveCategoryPath(getFolder, yearFolder) {
 // pro Treffer Jahr/Kategorie aus dem Ziel-Ordner an. Eine OR-Query ueber alle Ordner-IDs
 // statt Aufloesen pro Datei -> wenige Subrequests, unabhaengig von der Dateimenge.
 async function searchInFolders(accessToken, targetFolders, q) {
-  if (targetFolders.length === 0) return [];
+  if (targetFolders.length === 0) return { results: [], abgeschnitten: false };
   const metaByParent = new Map(targetFolders.map((f) => [f.id, f]));
   const ors = targetFolders.map((f) => `'${f.id}' in parents`).join(' or ');
   const scopeQ = `(${ors}) and trashed=false and mimeType='application/pdf'`;
-  const files = await searchWithinScope(accessToken, scopeQ, q);
-  return files.map((f) => {
-    const meta = metaByParent.get(f.parents?.[0]) || {};
-    return toResult(f, meta.jahr || '', meta.kategorie || '');
-  });
+  const { files, abgeschnitten } = await searchWithinScope(accessToken, scopeQ, q);
+  return {
+    results: files.map((f) => {
+      const meta = metaByParent.get(f.parents?.[0]) || {};
+      return toResult(f, meta.jahr || '', meta.kategorie || '');
+    }),
+    abgeschnitten,
+  };
 }
 
 // Nur-Jahr-Filter: alle Ordner namens <jahr> (einer je Kategorie) in EINER Abfrage holen und
 // je Ordner den vollen Kategorie-Pfad rekonstruieren (memoisiert, gebunden durch #Kategorien).
 async function yearFolderTargets(accessToken, jahr) {
   const folderQ = `name='${escapeForQuery(String(jahr))}' and mimeType='application/vnd.google-apps.folder' and trashed=false`;
-  const yearFolders = await queryDrive(accessToken, folderQ);
+  const { files: yearFolders } = await queryDrive(accessToken, folderQ);
   const folderCache = new Map();
   const getFolder = async (id) => {
     if (folderCache.has(id)) return folderCache.get(id);
@@ -252,7 +280,7 @@ async function categoryFolderTargets(accessToken, kategorie) {
   const catId = await findFolderByPath(accessToken, kategorie.split('/'));
   if (!catId) return [];
   const folderQ = `'${catId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`;
-  const yearFolders = await queryDrive(accessToken, folderQ);
+  const { files: yearFolders } = await queryDrive(accessToken, folderQ);
   return yearFolders.map((yf) => ({ id: yf.id, jahr: yf.name, kategorie }));
 }
 
@@ -275,10 +303,10 @@ async function searchDocuments(env, { q, kategorie, jahr }) {
   if (kategorie && jahr) {
     const segments = [...kategorie.split('/'), String(jahr)];
     const folderId = await findFolderByPath(accessToken, segments);
-    if (!folderId) return [];
+    if (!folderId) return { results: [], abgeschnitten: false };
     const scopeQ = `'${folderId}' in parents and trashed=false and mimeType='application/pdf'`;
-    const files = await searchWithinScope(accessToken, scopeQ, q);
-    return files.map((f) => toResult(f, String(jahr), kategorie));
+    const { files, abgeschnitten } = await searchWithinScope(accessToken, scopeQ, q);
+    return { results: files.map((f) => toResult(f, String(jahr), kategorie)), abgeschnitten };
   }
 
   // Einzelfilter -> Ziel-Ordner top-down aufloesen (wenige Abfragen, unabhaengig von der
@@ -288,8 +316,8 @@ async function searchDocuments(env, { q, kategorie, jahr }) {
 
   // Kein Filter -> breite Query (drive.file-Scope beschraenkt automatisch auf eigene Dateien).
   const broadScopeQ = `trashed=false and mimeType='application/pdf'`;
-  const candidates = await searchWithinScope(accessToken, broadScopeQ, q);
-  return candidates.map((f) => toResult(f, '', ''));
+  const { files, abgeschnitten } = await searchWithinScope(accessToken, broadScopeQ, q);
+  return { results: files.map((f) => toResult(f, '', '')), abgeschnitten };
 }
 
 export { uploadDocument, searchDocuments };

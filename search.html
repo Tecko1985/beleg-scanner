@@ -42,6 +42,7 @@
   .result-row .name { font-weight: 600; }
   .result-row .meta { color: var(--muted); font-size: 0.8rem; }
   .result-row a { color: var(--blue); font-weight: 700; text-decoration: none; white-space: nowrap; align-self: center; }
+  .such-deckel { background: #fff8e1; border: 1px solid #f0d38a; border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; font-size: 0.85rem; color: #6b5410; }
   .spinner { display: none; text-align: center; padding: 20px 0; color: var(--muted); }
   .empty-state { text-align: center; padding: 20px 0; color: var(--muted); font-size: 0.9rem; display: none; }
   .toast {
@@ -113,6 +114,7 @@
 
   <div class="card" id="resultsCard" style="display:none">
     <h2>Ergebnisse</h2>
+    <div class="such-deckel" id="deckelHinweis" style="display:none"></div>
     <div id="resultsList"></div>
   </div>
  </div>
@@ -248,7 +250,7 @@
 
       document.getElementById('passwordCard').style.display = 'none';
       document.getElementById('searchCard').style.display = 'block';
-      renderResults(result.results || []);
+      renderResults(result.results || [], !!result.abgeschnitten);
     } catch (e) {
       toast('❌ Fehlgeschlagen: ' + e.message);
     } finally {
@@ -256,12 +258,24 @@
     }
   }
 
-  function renderResults(results) {
+  // abgeschnitten = der Worker hat seinen Seiten-Deckel erreicht, in Drive liegt
+  // mehr. Ohne diesen Hinweis sah eine halbe Trefferliste aus wie eine ganze - und
+  // eine leere Liste wie "gibt es nicht" statt "ausserhalb des Deckels".
+  function renderResults(results, abgeschnitten) {
+    const hinweis = document.getElementById('deckelHinweis');
     if (results.length === 0) {
+      document.getElementById('emptyState').textContent = abgeschnitten
+        ? 'Keine Treffer in dem Teil des Archivs, der durchsucht wurde — es gibt mehr Dokumente, als eine Suche auf einmal durchsieht. Bitte mit Kategorie und Jahr eingrenzen.'
+        : 'Keine Treffer.';
       document.getElementById('emptyState').style.display = 'block';
       document.getElementById('resultsCard').style.display = 'none';
       return;
     }
+
+    hinweis.textContent = abgeschnitten
+      ? '⚠️ Es gibt mehr Dokumente, als eine Suche auf einmal durchsieht — diese Liste ist nicht vollständig. Bitte mit Kategorie und Jahr eingrenzen.'
+      : '';
+    hinweis.style.display = abgeschnitten ? 'block' : 'none';
 
     const list = document.getElementById('resultsList');
     list.innerHTML = results.map((r) => {
@@ -301,6 +315,12 @@
   // --- Version / Info-Tab -----------------------------------------------------
   const APP_VERSION = '1.0';
   const APP_CHANGELOG = [
+    { version: '1.1', groups: [
+      { title: 'Die Suche sieht jetzt das ganze Archiv', items: [
+        'Bisher hat die Suche nur die erste Seite geholt, die Google Drive schickt — höchstens 100 Dokumente je Ordner, beim Suchen nach einem Dateinamen die 200 neuesten. Alles Ältere war unauffindbar, und die Seite meldete dafür ganz normal „Keine Treffer.“ Man konnte nicht unterscheiden, ob es den Beleg nicht gibt oder ob er nur nicht mitgesucht wurde.',
+        'Jetzt wird durchgeblättert. Ist ein Archiv so groß, dass auch das nicht reicht, steht das über der Trefferliste — mit der Bitte, nach Kategorie und Jahr einzugrenzen.'
+      ]}
+    ]},
     { version: '1.0', groups: [
       { title: 'Suchen', items: [
         'Volltextsuche im erkannten Text der abgelegten Belege, nicht nur im Dateinamen.',
