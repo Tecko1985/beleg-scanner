@@ -567,7 +567,7 @@ async function searchDocuments(env, { q, kategorie, jahr }) {
 
 // --- worker.js ---------------------------------------------------------------
 
-const ALLOWED_ORIGIN = '*';
+const ALLOWED_ORIGIN = 'https://tecko1985.github.io';
 const MAX_FILE_BYTES = 15 * 1024 * 1024;
 // Hoechstens so viele FEHLversuche je IP und Stunde. Ein vertipptes Passwort
 // braucht ein paar Anlaeufe, ein Durchprobieren scheitert daran. Vorbild:

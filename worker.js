@@ -23,7 +23,20 @@ import { CATEGORIES, FALLBACK_CATEGORY, isValidCategory } from './categories.js'
 import { buildSearchablePdf } from './pdf.js';
 import { uploadDocument, searchDocuments } from './storage/google-drive.js';
 
-const ALLOWED_ORIGIN = '*'; // Anpassen, sobald die Scan-Seite ein festes Hosting hat (siehe README)
+// ⚠️ Bis zum 06.09.2026 stand hier '*' mit dem Vermerk „Anpassen, sobald die
+// Scan-Seite ein festes Hosting hat“. Sie hat eines: index.html und search.html
+// liegen unter https://tecko1985.github.io/beleg-scanner/ und rufen von dort
+// https://beleg-scanner.michel-brunner.workers.dev.
+//
+// Mit '*' durfte JEDE Seite im Netz den Worker im Browser eines Besuchers rufen.
+// Ohne Passwort war das folgenlos -- aber es hat den Passwortschutz zum einzigen
+// Riegel gemacht, und ein Riegel allein ist keine Tiefe.
+//
+// ⚠️ Wenn die Scan-Seite je umzieht, MUSS diese Zeile mit. Sonst laufen alle
+// Uploads in einen CORS-Fehler, den der Browser nur in der Konsole zeigt --
+// die Seite sieht dann einfach kaputt aus. Und: lokale Vorschau (localhost)
+// ist damit ausgeschlossen; zum Entwickeln hier voruebergehend '*' setzen.
+const ALLOWED_ORIGIN = 'https://tecko1985.github.io';
 const MAX_FILE_BYTES = 15 * 1024 * 1024; // 15 MB pro Einzeldatei (Foto oder PDF)
 // Hoechstens so viele FEHLversuche je IP und Stunde. Ein vertipptes Passwort
 // braucht ein paar Anlaeufe, ein Durchprobieren scheitert daran. Vorbild:
