@@ -25,8 +25,12 @@ import { uploadDocument, searchDocuments } from './storage/google-drive.js';
 
 const ALLOWED_ORIGIN = '*'; // Anpassen, sobald die Scan-Seite ein festes Hosting hat (siehe README)
 const MAX_FILE_BYTES = 15 * 1024 * 1024; // 15 MB pro Einzeldatei (Foto oder PDF)
-const ALLOWED_MIME = /^image\/jpe?g$/;
-const PDF_MIME = /^application\/pdf$/;
+// Hoechstens so viele FEHLversuche je IP und Stunde. Ein vertipptes Passwort
+// braucht ein paar Anlaeufe, ein Durchprobieren scheitert daran. Vorbild:
+// bremseOffen/bremseFehlschlag in E:\agelan\worker.js und
+// pwBremseOffen/pwBremseFehlschlag in E:\ToolsUebersicht\admin-worker.js.
+const FEHL_MAX_PRO_STUNDE = 30;
+const FEHL_ZAEHLER = new Map();
 const MAX_PAGES = 10; // max. Fotos pro mehrseitigem Beleg
 // Gemini begrenzt Inline-Requests auf ~20MB (Base64 inflationiert Roh-Bytes um ~33%) -
 // daher eigene, niedrigere Grenze fuer die Summe mehrerer Foto-Seiten in einem Request.
@@ -161,6 +165,48 @@ function bytesToBase64(bytes) {
   return btoa(binary);
 }
 
+function bremseIp(request) {
+  return String((request.headers && request.headers.get('CF-Connecting-IP')) || '');
+}
+
+function bremseOffen(request) {
+  const ip = bremseIp(request);
+  if (!ip) return true;
+  const eintrag = FEHL_ZAEHLER.get(ip);
+  if (!eintrag || Date.now() - eintrag.start > 3600000) return true;
+  return eintrag.n < FEHL_MAX_PRO_STUNDE;
+}
+
+// Nur nach einem FEHLversuch aufrufen, nie nach einem erfolgreichen -- sonst
+// sperrt sich aus, wer das Passwort kennt und viel scannt.
+function bremseFehlschlag(request) {
+  const ip = bremseIp(request);
+  if (!ip) return;
+  const jetzt = Date.now();
+  const eintrag = FEHL_ZAEHLER.get(ip);
+  if (!eintrag || jetzt - eintrag.start > 3600000) {
+    FEHL_ZAEHLER.set(ip, { start: jetzt, n: 1 });
+    // Aufraeumen, damit die Map in einem langlebigen Isolate nicht waechst.
+    if (FEHL_ZAEHLER.size > 500) {
+      for (const [k, v] of FEHL_ZAEHLER) {
+        if (jetzt - v.start > 3600000) FEHL_ZAEHLER.delete(k);
+      }
+    }
+    return;
+  }
+  eintrag.n++;
+}
+
+// Der Dateityp aus den ERSTEN BYTES. f.type ist der Content-Type aus dem
+// Multipart-Rumpf und damit eine Angabe des Absenders: mit
+// type: 'application/pdf' gingen beliebige Bytes unveraendert nach Drive.
+// Dieser Worker kennt genau zwei Formen -- JPEG-Fotos und PDF.
+function erkenneDateiTyp(b) {
+  if (b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return 'jpeg';
+  if (b.length >= 4 && b[0] === 0x25 && b[1] === 0x50 && b[2] === 0x44 && b[3] === 0x46) return 'pdf';
+  return null;
+}
+
 // Vergleich ueber SHA-256-Digests gleicher Laenge + konstante-Zeit-Vergleich, damit
 // weder Timing noch ein Laengen-Check das Passwort verraet. Fehlt das Secret, sind
 // alle Zugriffe gesperrt (fail-closed).
@@ -183,8 +229,14 @@ async function checkPassword(env, secretName, given) {
 // per eigenem UPLOAD_PASSWORD-Secret geschuetzt (siehe fetch-Handler unten).
 async function handleSearch(request, env, url) {
   const password = request.headers.get('X-Search-Password') || '';
+  // Die Bremse VOR dem Vergleich: sonst kostet jeder Rateversuch weiterhin
+  // einen vollen Durchlauf. Die alte Verzoegerung war keine Bremse -- sie hielt
+  // nur auf, wer nacheinander probiert, und parallele Versuche gar nicht.
+  if (!bremseOffen(request)) {
+    return jsonResponse({ ok: false, error: 'Zu viele Fehlversuche. Bitte spaeter erneut versuchen.' }, 429);
+  }
   if (!(await checkPassword(env, 'SEARCH_PASSWORD', password))) {
-    await new Promise((resolve) => setTimeout(resolve, 800)); // Bremse gegen Durchprobieren, ohne Login erreichbar
+    bremseFehlschlag(request);
     return jsonResponse({ ok: false, error: 'Falsches oder fehlendes Passwort.' }, 401);
   }
 
@@ -219,8 +271,13 @@ export default {
     // Upload schuetzen: nur mit gueltigem Passwort. Verhindert, dass Fremde ueber die
     // (im Repo oeffentlich sichtbare) Worker-URL Uploads ausloesen -> Gemini-Quota-/Drive-Missbrauch.
     // Faellt "nach sicher": fehlt das Secret, sind alle Uploads gesperrt.
+    // Bremse vor dem Vergleich, siehe handleSearch. Ein Treffer auf
+    // UPLOAD_PASSWORD oeffnet Gemini-Kontingent und den Drive-Ordner.
+    if (!bremseOffen(request)) {
+      return jsonResponse({ ok: false, error: 'Zu viele Fehlversuche. Bitte spaeter erneut versuchen.' }, 429);
+    }
     if (!(await checkPassword(env, 'UPLOAD_PASSWORD', request.headers.get('X-Upload-Password') || ''))) {
-      await new Promise((resolve) => setTimeout(resolve, 800));
+      bremseFehlschlag(request);
       return jsonResponse({ ok: false, error: 'Falsches oder fehlendes Upload-Passwort.' }, 401);
     }
 
@@ -238,8 +295,12 @@ export default {
 
       // Genau 1 PDF -> bereits digitales Dokument importieren (kein Foto-Pfad).
       // Sonst muessen alle Eintraege JPEG-Fotos sein (1..N Seiten desselben Belegs).
-      const isPdfImport = files.length === 1 && PDF_MIME.test(files[0].type || '');
-      const allJpeg = files.every((f) => ALLOWED_MIME.test(f.type || ''));
+      const kopfBytes = await Promise.all(
+        files.map(async (f) => new Uint8Array(await f.slice(0, 8).arrayBuffer()))
+      );
+      const typen = kopfBytes.map(erkenneDateiTyp);
+      const isPdfImport = files.length === 1 && typen[0] === 'pdf';
+      const allJpeg = typen.length > 0 && typen.every((t) => t === 'jpeg');
       if (!isPdfImport && !allJpeg) {
         return jsonResponse(
           { ok: false, error: 'Nicht unterstuetzte Kombination von Dateitypen. Erlaubt: mehrere JPEG-Fotos (Seiten eines Belegs) ODER eine einzelne PDF-Datei.' },

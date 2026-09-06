@@ -315,6 +315,11 @@
   // --- Version / Info-Tab -----------------------------------------------------
   const APP_VERSION = '1.0';
   const APP_CHANGELOG = [
+    { version: '1.2', groups: [
+      { title: 'Schutz gegen Durchprobieren des Suchpassworts', items: [
+        'Ein falsches Suchpasswort kostete bisher nur 0,8 Sekunden Wartezeit; gezählt wurde nichts, und wer parallel probierte, wurde gar nicht ausgebremst. Jetzt sind höchstens 30 Fehlversuche je Stunde und Anschluss erlaubt, danach kommt eine klare Absage. Richtige Anmeldungen zählen nicht mit.'
+      ]}
+    ]},
     { version: '1.1', groups: [
       { title: 'Die Suche sieht jetzt das ganze Archiv', items: [
         'Bisher hat die Suche nur die erste Seite geholt, die Google Drive schickt — höchstens 100 Dokumente je Ordner, beim Suchen nach einem Dateinamen die 200 neuesten. Alles Ältere war unauffindbar, und die Seite meldete dafür ganz normal „Keine Treffer.“ Man konnte nicht unterscheiden, ob es den Beleg nicht gibt oder ob er nur nicht mitgesucht wurde.',
