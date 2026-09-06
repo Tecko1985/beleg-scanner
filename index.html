@@ -141,7 +141,7 @@
     <h2>🔒 Zugriff</h2>
     <p class="hint">Bitte einmalig das Upload-Passwort eingeben. Es wird auf diesem Gerät gespeichert, damit du es nicht bei jedem Scan erneut brauchst.</p>
     <div class="error-text" id="passwordError">Falsches Passwort.</div>
-    <input type="password" id="uploadPassword" placeholder="Passwort" onkeydown="if(event.key==='Enter')onPasswordSubmit()" />
+    <input type="password" id="uploadPassword" aria-label="Passwort zum Hochladen" placeholder="Passwort" onkeydown="if(event.key==='Enter')onPasswordSubmit()" />
     <button class="btn btn-blue" onclick="onPasswordSubmit()">Weiter</button>
   </div>
 

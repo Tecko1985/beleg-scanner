@@ -94,7 +94,7 @@
     <h2>🔒 Zugriff</h2>
     <p class="hint">Diese Suche zeigt deine privaten Belege - bitte Passwort eingeben.</p>
     <div class="error-text" id="passwordError">Falsches Passwort.</div>
-    <input type="password" id="searchPassword" placeholder="Passwort" onkeydown="if(event.key==='Enter')onPasswordSubmit()" />
+    <input type="password" id="searchPassword" aria-label="Passwort zum Suchen" placeholder="Passwort" onkeydown="if(event.key==='Enter')onPasswordSubmit()" />
     <button class="btn btn-blue" onclick="onPasswordSubmit()">Weiter</button>
   </div>
 
