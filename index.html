@@ -119,6 +119,12 @@
   .changelog-entry .cv { font-weight: 700; color: var(--blue); margin-bottom: 8px; }
   .changelog-group-title { font-weight: 600; font-size: 13px; margin: 8px 0 4px; }
   .changelog-entry ul { margin: 0; padding-left: 20px; color: var(--muted); line-height: 1.6; }
+  /* Die Karte "Funktionen" teilt sich die Optik mit der frueheren
+     Aenderungsliste. Die Schriftgroesse muss mit: sie haengt sonst an
+     .changelog-entry (hier 14px), und genau die Klasse hat diese Karte nicht. */
+  #funktionen-list { display: flex; flex-direction: column; gap: 18px; font-size: 14px; }
+  #funktionen-list .changelog-group-title { font-weight: 600; font-size: 13px; margin: 0 0 4px; }
+  #funktionen-list ul { margin: 0; padding-left: 20px; color: var(--muted); line-height: 1.6; }
 </style>
 </head>
 <body>
@@ -187,16 +193,19 @@
 
  <div class="tab-section" id="tab-info">
    <div class="card">
-     <h2>Über den Beleg-Scanner <span class="version-badge" id="version-badge-2"></span></h2>
+     <h2>Über den Beleg-Scanner</h2>
      <p class="hint">
        Beleg fotografieren oder PDF auswählen — Inhalt, Kategorie und Datum werden
        automatisch erkannt und das Ergebnis als durchsuchbares PDF in Google Drive
        abgelegt. Über die Lupe oben lassen sich abgelegte Belege durchsuchen.
      </p>
    </div>
+   <!-- Was die Seite kann. Quelle: APP_FUNKTIONEN unten im Script -- bewusst
+        getrennt von APP_CHANGELOG, das seit 07.09.2026 nicht mehr angezeigt
+        wird. Hier steht der Zustand, dort die Historie. -->
    <div class="card">
-     <h2>Änderungen</h2>
-     <div id="changelog-list"></div>
+     <h2>Funktionen</h2>
+     <div id="funktionen-list"></div>
    </div>
  
     <div class="card" id="ds-info-karte">
@@ -562,7 +571,86 @@
 
   // --- Version / Info-Tab -----------------------------------------------------
   const APP_VERSION = '1.0';
+  // Was der Beleg-Scanner kann -- steht im Info-Reiter als Karte "Funktionen".
+  // WICHTIG: Das ist NICHT der Changelog. Hier steht der ZUSTAND ("der Haken
+  // sammelt mehrere Fotos"), dort die Aenderung ("der Haken sammelt JETZT").
+  // Wer eine Funktion umbaut oder abschaltet, zieht diesen Text mit.
+  const APP_FUNKTIONEN = [
+    {
+      title: 'Beleg fotografieren',
+      items: [
+        'Der Knopf „Foto aufnehmen“ öffnet die Kamera des Handys — der Beleg wird direkt abfotografiert.',
+        'Vor dem Absenden zeigt eine Vorschau, was aufgenommen wurde.'
+      ]
+    },
+    {
+      title: 'Mehrseitige Belege',
+      items: [
+        'Der Haken „Dieser Beleg hat mehrere Seiten“ sammelt mehrere Fotos zu einem einzigen PDF.',
+        'Die aufgenommenen Seiten stehen als Streifen unter der Kamera und behalten ihre Reihenfolge.'
+      ]
+    },
+    {
+      title: 'Fertige PDF-Rechnungen einlesen',
+      items: [
+        'Rechnungen, die schon als PDF vorliegen, lassen sich über „PDF-Dateien auswählen“ einlesen — auch mehrere auf einmal.',
+        'Jede Datei wird einzeln ausgewertet und einzeln eingeordnet.'
+      ]
+    },
+    {
+      title: 'Automatische Erkennung',
+      items: [
+        'Aussteller, Betrag, Datum und Kategorie werden aus dem Beleg gelesen. Von Hand eintragen muss man nichts.',
+        'Einsortiert wird in feste Kategorien: Rechnungen, Verträge, Notar, Steuern und Sonstiges. Ist die Erkennung unsicher, landet der Beleg unter „Sonstiges“.',
+        'Ist der Erkennungsdienst überlastet, wird bis zu dreimal erneut versucht, statt den Vorgang abzubrechen.'
+      ]
+    },
+    {
+      title: 'Ablage',
+      items: [
+        'Das Ergebnis ist ein durchsuchbares PDF und landet in einem Google-Drive-Ordner, einsortiert nach Kategorie.',
+        'Die Belege liegen damit bei Google und nicht auf einem Vereinsserver — Näheres steht in der Karte „Datenschutz“.'
+      ]
+    },
+    {
+      title: 'Vorgänge im Hintergrund',
+      items: [
+        'Ein abgeschickter Beleg wandert in die Liste „Vorgänge“. Der nächste lässt sich sofort aufnehmen, ohne zu warten.',
+        'Je Vorgang steht dort, ob er läuft, fertig ist oder fehlgeschlagen — bei Erfolg mit Kategorie, Aussteller, Betrag und Ablageort.',
+        'Der Knopf „Erledigte ausblenden“ räumt die Liste wieder auf.'
+      ]
+    },
+    {
+      title: 'Zugang',
+      items: [
+        'Vor dem ersten Hochladen wird ein Passwort verlangt. Es bleibt auf dem Gerät gespeichert, damit es nicht bei jedem Beleg erneut nötig ist.',
+        'Nach 30 Fehlversuchen je Stunde und Anschluss kommt eine klare Absage. Richtige Eingaben zählen nicht mit.'
+      ]
+    },
+    {
+      title: 'Wo die Grenzen liegen',
+      items: [
+        'Angenommen werden nur Fotos als JPEG und Dateien als PDF. Ob eine Datei wirklich das eine oder das andere ist, entscheidet ihr Inhalt und nicht ihr Name.',
+        'Erkanntes lässt sich hier nicht nachträglich ändern. Wer eine falsche Kategorie korrigieren will, verschiebt das PDF in Google Drive.',
+        'Gesucht wird nicht auf dieser Seite, sondern über die Lupe oben rechts auf der eigenen Suchseite.'
+      ]
+    }
+  ];
+
   const APP_CHANGELOG = [
+    {
+      version: '1.2',
+      groups: [
+        {
+          title: 'Im Info-Reiter steht jetzt, was die App kann',
+          items: [
+            'Die Liste der Änderungen und die Versionsnummer sind aus dem Info-Reiter verschwunden.',
+            'Stattdessen steht dort die Karte „Funktionen“: was die App kann, nach Themen geordnet.',
+            'Was sich geändert hat, steht weiterhin in den Neuigkeiten auf der Startseite der Tools-Übersicht.'
+          ]
+        }
+      ]
+    },
     {
       version: '1.1',
       groups: [
@@ -604,9 +692,28 @@
     document.querySelectorAll('.tab-section').forEach(sec => sec.classList.toggle('active', sec.id === 'tab-' + name));
   }
 
+  // Die Karte "Funktionen" im Info-Reiter. Nutzt dieselben CSS-Klassen wie
+  // frueher die Aenderungsliste, damit beide Karten gleich aussehen.
+  function renderFunktionen() {
+    const container = document.getElementById('funktionen-list');
+    if (!container) return;
+    container.innerHTML = APP_FUNKTIONEN.map(g => `
+      <div class="changelog-group">
+        <div class="changelog-group-title">${escapeHtml(g.title)}</div>
+        <ul>${g.items.map(i => `<li>${escapeHtml(i)}</li>`).join('')}</ul>
+      </div>`).join('');
+  }
+
+  // Die Aenderungsliste steht seit 07.09.2026 NICHT mehr im Info-Reiter -- dort
+  // stehen nur noch die Funktionen. APP_CHANGELOG bleibt gepflegt: es ist die
+  // Quelle fuer die grosse Anleitung und fuer die Neuigkeiten auf der Startseite
+  // der Tools-Uebersicht. Darum steigt der Renderer still aus, wenn es das Ziel
+  // nicht mehr gibt, statt den Seitenstart mit einem Fehler abzubrechen.
   function renderVersionInfo() {
-    document.querySelectorAll('#version-badge, #version-badge-2').forEach(el => { if (el) el.textContent = 'v' + APP_VERSION; });
-    document.getElementById('changelog-list').innerHTML = APP_CHANGELOG.map(entry => `
+    renderFunktionen();
+    const container = document.getElementById('changelog-list');
+    if (!container) return;
+    container.innerHTML = APP_CHANGELOG.map(entry => `
       <div class="changelog-entry">
         <div class="cv">Version ${entry.version}</div>
         ${entry.groups.map(g => `

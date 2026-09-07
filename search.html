@@ -74,6 +74,12 @@
   .changelog-entry { font-size: 14px; }
   .changelog-entry .cv { font-weight: 700; color: var(--blue); margin-bottom: 8px; }
   .changelog-entry ul { margin: 0; padding-left: 20px; color: var(--muted); line-height: 1.6; }
+  /* Die Karte "Funktionen" teilt sich die Optik mit der frueheren
+     Aenderungsliste. Die Schriftgroesse muss mit: sie haengt sonst an
+     .changelog-entry (hier 14px), und genau die Klasse hat diese Karte nicht. */
+  #funktionen-list { display: flex; flex-direction: column; gap: 18px; font-size: 14px; }
+  #funktionen-list .cg-title { font-weight: 600; font-size: 13px; margin: 0 0 4px; }
+  #funktionen-list ul { margin: 0; padding-left: 20px; color: var(--muted); line-height: 1.6; }
 </style>
 </head>
 <body>
@@ -121,15 +127,18 @@
 
  <div class="tab-section" id="tab-info">
    <div class="card">
-     <h2>Über die Beleg-Suche <span class="version-badge" id="version-badge-2"></span></h2>
+     <h2>Über die Beleg-Suche</h2>
      <p class="hint">
        Durchsucht die mit dem Beleg-Scanner abgelegten Belege nach Text, Kategorie
        und Zeitraum. Gesucht wird im erkannten Text der PDFs, nicht nur im Dateinamen.
      </p>
    </div>
+   <!-- Was die Seite kann. Quelle: APP_FUNKTIONEN unten im Script -- bewusst
+        getrennt von APP_CHANGELOG, das seit 07.09.2026 nicht mehr angezeigt
+        wird. Hier steht der Zustand, dort die Historie. -->
    <div class="card">
-     <h2>Änderungen</h2>
-     <div id="changelog-list"></div>
+     <h2>Funktionen</h2>
+     <div id="funktionen-list"></div>
    </div>
  
       <div class="card" id="ds-info-karte">
@@ -314,7 +323,68 @@
 
   // --- Version / Info-Tab -----------------------------------------------------
   const APP_VERSION = '1.0';
+  // Was die Beleg-Suche kann -- steht im Info-Reiter als Karte "Funktionen".
+  // WICHTIG: Das ist NICHT der Changelog. Hier steht der ZUSTAND ("die Suche
+  // blaettert durch"), dort die Aenderung ("die Suche blaettert JETZT durch").
+  // Wer eine Funktion umbaut oder abschaltet, zieht diesen Text mit.
+  const APP_FUNKTIONEN = [
+    {
+      title: 'Suchen',
+      items: [
+        'Das Suchfeld durchsucht den Dateinamen und den Text, der beim Ablegen aus dem Beleg gelesen wurde.',
+        'Damit findet man einen Beleg auch über eine Rechnungsnummer oder einen Betrag, der nur im Dokument steht.',
+        'Die Eingabetaste startet die Suche, ebenso der Knopf „Suchen“.'
+      ]
+    },
+    {
+      title: 'Eingrenzen',
+      items: [
+        'Zwei Auswahlfelder grenzen ein: Kategorie und Jahr. Beide lassen sich mit dem Suchwort verbinden.',
+        'Zur Wahl stehen dieselben Kategorien, in die der Beleg-Scanner ablegt, und die letzten sechs Jahre.',
+        'Ohne Suchwort listet die Suche einfach alles auf, was in den gewählten Bereich fällt.'
+      ]
+    },
+    {
+      title: 'Treffer',
+      items: [
+        'Je Treffer stehen Dateiname, Kategorie, Jahr und das Datum der Ablage.',
+        'Der Knopf „Öffnen“ zeigt das PDF in Google Drive, in einem neuen Reiter.'
+      ]
+    },
+    {
+      title: 'Wenn das Archiv größer ist als ein Suchlauf',
+      items: [
+        'Eine Suche sieht eine begrenzte Zahl von Dokumenten durch. Wird diese Grenze erreicht, steht das über der Trefferliste — und auch dann, wenn es gar keine Treffer gab.',
+        'Der Hinweis ist wichtig: ohne ihn sähe eine halbe Liste aus wie eine vollständige und eine leere wie „gibt es nicht“.',
+        'Der Ausweg ist immer derselbe: mit Kategorie und Jahr eingrenzen.'
+      ]
+    },
+    {
+      title: 'Zugang',
+      items: [
+        'Die Suche zeigt private Belege und verlangt deshalb ein eigenes Passwort.',
+        'Das Passwort gilt nur für das offene Browser-Fenster; wird es geschlossen, fragt die Seite erneut.',
+        'Nach 30 Fehlversuchen je Stunde und Anschluss kommt eine klare Absage. Richtige Eingaben zählen nicht mit.'
+      ]
+    },
+    {
+      title: 'Wo die Grenzen liegen',
+      items: [
+        'Die Suche liest nur — löschen, umbenennen oder verschieben lässt sich ein Beleg hier nicht. Das geht in Google Drive.',
+        'Neue Belege kommen nicht über diese Seite herein, sondern über den Beleg-Scanner.',
+        'Gefunden wird nur, was beim Ablegen als Text erkannt wurde. Ein unlesbares Foto bleibt über seinen Inhalt unauffindbar.'
+      ]
+    }
+  ];
+
   const APP_CHANGELOG = [
+    { version: '1.3', groups: [
+      { title: 'Im Info-Reiter steht jetzt, was die App kann', items: [
+        'Die Liste der Änderungen und die Versionsnummer sind aus dem Info-Reiter verschwunden.',
+        'Stattdessen steht dort die Karte „Funktionen“: was die App kann, nach Themen geordnet.',
+        'Was sich geändert hat, steht weiterhin in den Neuigkeiten auf der Startseite der Tools-Übersicht.'
+      ]}
+    ]},
     { version: '1.2', groups: [
       { title: 'Schutz gegen Durchprobieren des Suchpassworts', items: [
         'Ein falsches Suchpasswort kostete bisher nur 0,8 Sekunden Wartezeit; gezählt wurde nichts, und wer parallel probierte, wurde gar nicht ausgebremst. Jetzt sind höchstens 30 Fehlversuche je Stunde und Anschluss erlaubt, danach kommt eine klare Absage. Richtige Anmeldungen zählen nicht mit.'
@@ -341,13 +411,33 @@
     document.querySelectorAll('nav button[data-tab]').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
     document.querySelectorAll('.tab-section').forEach(sec => sec.classList.toggle('active', sec.id === 'tab-' + name));
   }
-  (function setupInfoTab() {
-    document.querySelectorAll('#version-badge, #version-badge-2').forEach(el => { el.textContent = 'v' + APP_VERSION; });
-    document.getElementById('changelog-list').innerHTML = APP_CHANGELOG.map(e => `
-      <div class="changelog-entry">
-        <div class="cv">Version ${e.version}</div>
-        ${e.groups.map(g => `<ul>${g.items.map(i => `<li>${i}</li>`).join('')}</ul>`).join('')}
+  // Die Karte "Funktionen" im Info-Reiter. Nutzt dieselben CSS-Klassen wie
+  // frueher die Aenderungsliste, damit beide Karten gleich aussehen.
+  function renderFunktionen() {
+    const container = document.getElementById('funktionen-list');
+    if (!container) return;
+    container.innerHTML = APP_FUNKTIONEN.map(g => `
+      <div class="changelog-group">
+        <div class="cg-title">${escapeHtml(g.title)}</div>
+        <ul>${g.items.map(i => `<li>${escapeHtml(i)}</li>`).join('')}</ul>
       </div>`).join('');
+  }
+
+  // Die Aenderungsliste steht seit 07.09.2026 NICHT mehr im Info-Reiter -- dort
+  // stehen nur noch die Funktionen. APP_CHANGELOG bleibt gepflegt: es ist die
+  // Quelle fuer die grosse Anleitung und fuer die Neuigkeiten auf der Startseite
+  // der Tools-Uebersicht. Darum steigt der Renderer still aus, wenn es das Ziel
+  // nicht mehr gibt, statt den Seitenstart mit einem Fehler abzubrechen.
+  (function setupInfoTab() {
+    renderFunktionen();
+    const container = document.getElementById('changelog-list');
+    if (container) {
+      container.innerHTML = APP_CHANGELOG.map(e => `
+        <div class="changelog-entry">
+          <div class="cv">Version ${e.version}</div>
+          ${e.groups.map(g => `<ul>${g.items.map(i => `<li>${i}</li>`).join('')}</ul>`).join('')}
+        </div>`).join('');
+    }
     document.querySelectorAll('nav button[data-tab]').forEach(b => {
       b.addEventListener('click', () => activateTab(b.dataset.tab));
     });
