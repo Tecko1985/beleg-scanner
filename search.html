@@ -107,10 +107,10 @@
   <div class="card" id="searchCard" style="display:none">
     <h2>Suche</h2>
     <p class="hint">Freitext durchsucht Dateiname und erkannten Inhalt. Filter sind optional kombinierbar.</p>
-    <input type="text" id="searchQuery" placeholder="Suchbegriff (Aussteller, Inhalt, ...)" onkeydown="if(event.key==='Enter')runSearch()" />
+    <input type="text" aria-label="Suchbegriff" id="searchQuery" placeholder="Suchbegriff (Aussteller, Inhalt, ...)" onkeydown="if(event.key==='Enter')runSearch()" />
     <div class="filter-row">
-      <select id="kategorieFilter"></select>
-      <select id="jahrFilter"></select>
+      <select id="kategorieFilter" aria-label="Kategorie"></select>
+      <select id="jahrFilter" aria-label="Jahr"></select>
     </div>
     <button class="btn btn-blue" onclick="runSearch()">🔍 Suchen</button>
   </div>
