@@ -182,6 +182,43 @@ function bremseIp(request) {
   return String((request.headers && request.headers.get('CF-Connecting-IP')) || '');
 }
 
+
+// ⚠️⚠️ Zum Zaehlwerk hier darueber (2026-09-15 gemessen): es greift LIVE
+// praktisch nie. Cloudflare fuehrt den Worker in Isolates aus, die frei
+// erzeugt und verworfen werden -- die Map im Modul-Rumpf ist ein
+// Wegwerf-Gedaechtnis. Belegt an einem Wegwerf-Worker: 30 gleichzeitige
+// Anfragen verteilten sich auf mindestens ZWOELF Isolates, hoechster
+// Zaehlerstand 5. Eine Stundengrenze wird so nie erreicht.
+//
+// Die Map bleibt stehen (kostet nichts, greift wenn zwei Anfragen dasselbe
+// Isolate treffen). Der wirksame Teil ist die Funktion darunter.
+
+// Cloudflares eigenes Zaehlwerk (Bindung "BREMSE"). Zaehlt AUSSERHALB des
+// Isolates und ueberlebt den Instanzwechsel.
+//
+// ⚠️ EHRLICH ZU DEN GRENZEN -- das ist KEIN Ersatz fuer die Stundengrenze
+// darueber, sondern ein Deckel gegen Dauerbeschuss:
+//   - Cloudflare kennt nur Fenster von 10 oder 60 Sekunden, keine Stunde.
+//   - Gezaehlt wird je Cloudflare-Standort. Eine Welle aus einem Anschluss
+//     verteilt sich; bis ein Standort ueber die Grenze kommt, braucht es
+//     grob das Zwanzigfache der Grenze an Anfragen.
+// Wer eine echte Stundengrenze braucht, muss in D1 zaehlen.
+//
+// Drei Faelle geben bewusst frei statt zu sperren: Bindung fehlt (aelterer
+// Deploy), keine Client-Adresse (Aufruf ohne eigene Herkunft), Bindung wirft.
+async function bindungBremseOffen(env, request, kennung) {
+  if (!env || !env.BREMSE || typeof env.BREMSE.limit !== "function") return true;
+  const ip = String((request && request.headers && request.headers.get("CF-Connecting-IP")) || "");
+  if (!ip) return true;
+  try {
+    const r = await env.BREMSE.limit({ key: kennung + ":" + ip });
+    return r && r.success !== false;
+  } catch (fehler) {
+    console.warn("BREMSE-Bindung nicht nutzbar: " + ((fehler && fehler.message) || fehler));
+    return true;
+  }
+}
+
 function bremseOffen(request) {
   const ip = bremseIp(request);
   if (!ip) return true;
@@ -250,6 +287,13 @@ async function handleSearch(request, env, url) {
   }
   if (!(await checkPassword(env, 'SEARCH_PASSWORD', password))) {
     bremseFehlschlag(request);
+    // ⚠️ Der Zaehler, der den Isolate-Wechsel ueberlebt -- bewusst HIER im
+    // Fehlschlag-Zweig und nicht oben am Eingang: limit() zaehlt jeden Aufruf
+    // mit, und wer das Passwort kennt, sucht womoeglich oft. Am Eingang
+    // wuerde sich also der regulaere Nutzer selbst aussperren.
+    if (!(await bindungBremseOffen(env, request, "beleg-suche"))) {
+      return jsonResponse({ ok: false, error: 'Zu viele Fehlversuche. Bitte spaeter erneut versuchen.' }, 429);
+    }
     return jsonResponse({ ok: false, error: 'Falsches oder fehlendes Passwort.' }, 401);
   }
 
@@ -291,6 +335,11 @@ export default {
     }
     if (!(await checkPassword(env, 'UPLOAD_PASSWORD', request.headers.get('X-Upload-Password') || ''))) {
       bremseFehlschlag(request);
+      // Wie bei der Suche: im Fehlschlag-Zweig. Wer viele Belege hochlaedt,
+      // soll sein eigenes Kontingent nicht aufbrauchen.
+      if (!(await bindungBremseOffen(env, request, "beleg-upload"))) {
+        return jsonResponse({ ok: false, error: 'Zu viele Fehlversuche. Bitte spaeter erneut versuchen.' }, 429);
+      }
       return jsonResponse({ ok: false, error: 'Falsches oder fehlendes Upload-Passwort.' }, 401);
     }
 
