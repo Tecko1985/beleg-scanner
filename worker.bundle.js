@@ -731,19 +731,56 @@ function bremseIp(request) {
 //     grob das Zwanzigfache der Grenze an Anfragen.
 // Wer eine echte Stundengrenze braucht, muss in D1 zaehlen.
 //
-// Drei Faelle geben bewusst frei statt zu sperren: Bindung fehlt (aelterer
-// Deploy), keine Client-Adresse (Aufruf ohne eigene Herkunft), Bindung wirft.
-async function bindungBremseOffen(env, request, kennung) {
+// Zwei Faelle geben bewusst frei statt zu sperren: Bindung fehlt (aelterer
+// Deploy) und Bindung wirft. ⚠️ Eine fehlende Client-Adresse gab bis 16.09.2026
+// ebenfalls frei; sie zaehlt jetzt in den gemeinsamen Topf "ohne-ip" -- dieser
+// Worker hat keinen Aufrufer ohne eigene Herkunft, der das braeuchte.
+async function bremseLimit(env, schluessel) {
   if (!env || !env.BREMSE || typeof env.BREMSE.limit !== "function") return true;
-  const ip = String((request && request.headers && request.headers.get("CF-Connecting-IP")) || "");
-  if (!ip) return true;
   try {
-    const r = await env.BREMSE.limit({ key: kennung + ":" + ip });
-    return r && r.success !== false;
+    const r = await env.BREMSE.limit({ key: schluessel });
+    return !!r && r.success !== false;
   } catch (fehler) {
     console.warn("BREMSE-Bindung nicht nutzbar: " + ((fehler && fehler.message) || fehler));
     return true;
   }
+}
+
+// ⚠️ Abnahme 16.09.2026 (Fund 2): limit() kann nicht nachsehen, ohne mitzuzaehlen.
+// Deshalb stand die Bindung nur im Fehlschlag-Zweig -- bei voller Grenze bekam ein
+// falsches Passwort 429, ein RICHTIGES aber weiter 200, und ein Rater erkannte den
+// Treffer trotzdem. limit() auch beim Erfolg auf DEMSELBEN Schluessel wuerde
+// dagegen den regulaeren Nutzer aussperren, der viel scannt oder sucht.
+//
+// Der Bau: FAECHER. Ein Fehlversuch zaehlt in allen BREMSE_FAECHER Faechern, ein
+// Erfolg nur in einem (reihum). Nach 10 Fehlversuchen (Grenze der Bindung) sind
+// alle Faecher voll, also bekommt auch der Treffer 429. Wer das Passwort kennt,
+// belastet je Aufruf nur ein Sechzehntel -- erst ~160 erfolgreiche Aufrufe je
+// Minute aus einer Adresse (am selben Standort) fuellen die Faecher. Gleicher Bau wie in
+// E:\ToolsUebersicht\admin-worker.js (bindungFehlschlagZaehlen).
+//
+// Restluecke: die Bindung zaehlt je Cloudflare-Standort und ist traege; wer auf
+// viele Standorte verteilt, bekommt weiter Urteile, nur gedeckelt.
+const BREMSE_FAECHER = 16;
+
+function bremseSchluessel(request, kennung) {
+  const ip = String((request && request.headers && request.headers.get("CF-Connecting-IP")) || "");
+  return kennung + ":" + (ip || "ohne-ip");
+}
+
+async function bindungFehlschlagZaehlen(env, request, kennung) {
+  const basis = bremseSchluessel(request, kennung);
+  const aufrufe = [];
+  for (let i = 0; i < BREMSE_FAECHER; i++) aufrufe.push(bremseLimit(env, basis + ":f" + i));
+  return (await Promise.all(aufrufe)).every(Boolean);
+}
+
+// Reihum statt Wuerfel: im selben Isolate verteilen sich die Treffer exakt
+// gleichmaessig, der Startpunkt ist je Isolate zufaellig.
+let bremseRundlauf = Math.floor(Math.random() * BREMSE_FAECHER);
+async function bindungErfolgPruefen(env, request, kennung) {
+  bremseRundlauf = (bremseRundlauf + 1) % BREMSE_FAECHER;
+  return bremseLimit(env, bremseSchluessel(request, kennung) + ":f" + bremseRundlauf);
 }
 
 function bremseOffen(request) {
@@ -818,10 +855,14 @@ async function handleSearch(request, env, url) {
     // Fehlschlag-Zweig und nicht oben am Eingang: limit() zaehlt jeden Aufruf
     // mit, und wer das Passwort kennt, sucht womoeglich oft. Am Eingang
     // wuerde sich also der regulaere Nutzer selbst aussperren.
-    if (!(await bindungBremseOffen(env, request, "beleg-suche"))) {
+    if (!(await bindungFehlschlagZaehlen(env, request, "beleg-suche"))) {
       return jsonResponse({ ok: false, error: 'Zu viele Fehlversuche. Bitte spaeter erneut versuchen.' }, 429);
     }
     return jsonResponse({ ok: false, error: 'Falsches oder fehlendes Passwort.' }, 401);
+  }
+  // Auch der Treffer fragt die Bremse (siehe bindungFehlschlagZaehlen).
+  if (!(await bindungErfolgPruefen(env, request, "beleg-suche"))) {
+    return jsonResponse({ ok: false, error: 'Zu viele Fehlversuche. Bitte spaeter erneut versuchen.' }, 429);
   }
 
   try {
@@ -864,10 +905,14 @@ export default {
       bremseFehlschlag(request);
       // Wie bei der Suche: im Fehlschlag-Zweig. Wer viele Belege hochlaedt,
       // soll sein eigenes Kontingent nicht aufbrauchen.
-      if (!(await bindungBremseOffen(env, request, "beleg-upload"))) {
+      if (!(await bindungFehlschlagZaehlen(env, request, "beleg-upload"))) {
         return jsonResponse({ ok: false, error: 'Zu viele Fehlversuche. Bitte spaeter erneut versuchen.' }, 429);
       }
       return jsonResponse({ ok: false, error: 'Falsches oder fehlendes Upload-Passwort.' }, 401);
+    }
+    // Auch der Treffer fragt die Bremse (siehe bindungFehlschlagZaehlen).
+    if (!(await bindungErfolgPruefen(env, request, "beleg-upload"))) {
+      return jsonResponse({ ok: false, error: 'Zu viele Fehlversuche. Bitte spaeter erneut versuchen.' }, 429);
     }
 
     try {
