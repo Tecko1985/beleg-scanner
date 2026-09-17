@@ -12,3 +12,4 @@
 exclude:
   - "worker.bundle.js"
   - "worker.js"
+  - "test-pdf.html"
