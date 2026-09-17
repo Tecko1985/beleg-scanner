@@ -1,0 +1,14 @@
+# Nicht ausliefern.
+#
+# Die Repos sind privat, die Pages-Seite ist es NICHT: jede Datei im
+# ausgelieferten Ordner ist fuer jeden im Internet abrufbar. Pruefstaende,
+# Schema-Dateien und Node-Skripte gehoeren nicht dazu.
+#
+# ⚠️ Hier NUR eintragen, was keine Seite und kein Skript der App laedt.
+# Ein Web Worker (besprechung/transcribe-worker.js) wird vom Browser geholt
+# und muss ausgeliefert bleiben.
+#
+# Angelegt bei der Abnahme am 17.09.2026.
+exclude:
+  - "worker.bundle.js"
+  - "worker.js"
