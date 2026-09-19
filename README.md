@@ -49,4 +49,4 @@ daraus über `pdf.js` ein PDF mit unsichtbar hinterlegter Textebene und legt es
 
 ---
 
-Ein Werkzeug des 1. SC 1911 Heiligenstadt e.V. Alle Werkzeuge auf einen Blick: [Tools-Übersicht](https://sc1911heiligenstadt.github.io/ToolsUebersicht/) · Erklärungen im [Toolbox Wiki](https://sc1911heiligenstadt.github.io/Vereinswiki/).
+Ein Werkzeug des 1. SC 1911 Heiligenstadt e.V. Alle Werkzeuge auf einen Blick: [Tools-Übersicht](https://sc1911heiligenstadt.github.io/ToolsUebersicht/).
