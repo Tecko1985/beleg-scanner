@@ -41,7 +41,8 @@
   .result-row .info { display: flex; flex-direction: column; gap: 2px; }
   .result-row .name { font-weight: 600; }
   .result-row .meta { color: var(--muted); font-size: 0.8rem; }
-  .result-row a { color: var(--blue); font-weight: 700; text-decoration: none; white-space: nowrap; align-self: center; }
+  /* Unterstrichen: das Vereinsblau hebt sich von Fliesstext kaum ab (1,15 : 1, Abnahme D 21.09.2026). */
+  .result-row a { color: var(--blue); font-weight: 700; text-decoration: underline; text-underline-offset: 2px; white-space: nowrap; align-self: center; }
   .such-deckel { background: #fff8e1; border: 1px solid #f0d38a; border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; font-size: 0.85rem; color: #6b5410; }
   .spinner { display: none; text-align: center; padding: 20px 0; color: var(--muted); }
   .empty-state { text-align: center; padding: 20px 0; color: var(--muted); font-size: 0.9rem; display: none; }
