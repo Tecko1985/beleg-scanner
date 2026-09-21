@@ -57,6 +57,23 @@
     background: rgba(255,255,255,0.18); border: 1px solid rgba(255,255,255,0.35);
     color: #fff; border-radius: 999px; padding: 2px 8px; vertical-align: middle;
   }
+  .header-info-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 14px;
+    font-weight: 600;
+    color: white;
+    cursor: pointer;
+    background: transparent;
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    padding: 8px 16px;
+    border-radius: 999px;
+    white-space: nowrap;
+    flex: 0 0 auto;
+    transition: background 0.15s ease;
+  }
+  .header-info-btn:hover, .header-info-btn.active { background: rgba(255, 255, 255, 0.28); }
   nav {
     display: flex; gap: 4px; background: var(--white);
     padding: 8px 24px 0; border-bottom: 1px solid var(--border);
@@ -86,12 +103,12 @@
 <header>
   <span class="icon">🔍</span>
   <h1>Beleg-Suche</h1>
+  <button class="header-info-btn" data-tab="info">Info</button>
   <img class="header-logo" src="https://sc1911heiligenstadt.github.io/logo.svg" alt="1. SC 1911 Heiligenstadt e.V." />
 </header>
 
 <nav>
   <button data-tab="suche" class="active">Suche</button>
-  <button data-tab="info" style="margin-left:auto;">Info</button>
 </nav>
 
 <main>
@@ -408,7 +425,7 @@
     ]}
   ];
   function activateTab(name) {
-    document.querySelectorAll('nav button[data-tab]').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
+    document.querySelectorAll('button[data-tab]').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
     document.querySelectorAll('.tab-section').forEach(sec => sec.classList.toggle('active', sec.id === 'tab-' + name));
   }
   // Die Karte "Funktionen" im Info-Reiter. Nutzt dieselben CSS-Klassen wie
@@ -438,7 +455,7 @@
           ${e.groups.map(g => `<ul>${g.items.map(i => `<li>${i}</li>`).join('')}</ul>`).join('')}
         </div>`).join('');
     }
-    document.querySelectorAll('nav button[data-tab]').forEach(b => {
+    document.querySelectorAll('button[data-tab]').forEach(b => {
       b.addEventListener('click', () => activateTab(b.dataset.tab));
     });
   })();
