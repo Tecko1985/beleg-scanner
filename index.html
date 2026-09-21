@@ -158,7 +158,7 @@
 </header>
 
 <nav>
-  <button data-tab="scannen" class="active">Scannen</button>
+  <button data-tab="scannen" class="active" aria-current="page">Scannen</button>
 </nav>
 
 <main>
@@ -708,7 +708,12 @@
   ];
 
   function activateTab(name) {
-    document.querySelectorAll('button[data-tab]').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
+    // aria-current: Vorleseprogramme erkennen den aktiven Reiter nicht an der Klasse (Abnahme D 21.09.2026).
+    document.querySelectorAll('button[data-tab]').forEach(b => {
+      const an = b.dataset.tab === name;
+      b.classList.toggle('active', an);
+      if (an) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
+    });
     document.querySelectorAll('.tab-section').forEach(sec => sec.classList.toggle('active', sec.id === 'tab-' + name));
   }
 
