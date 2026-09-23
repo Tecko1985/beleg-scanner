@@ -338,7 +338,43 @@ async function ensureFolder(accessToken, name, parentId) {
   return data.id;
 }
 
-async function startResumableSession(accessToken, { filename, parentId, existingFileId, totalBytes, mimeType }) {
+// Wie oft uploadDocument einen freien Namen (_2, _3, ...) sucht. Jede Probe
+// kostet eine Drive-Abfrage (Subrequest-Grenze des Workers beachten).
+const NAMENS_VERSUCHE = 20;
+
+// Datei (kein Ordner) gleichen Namens im Ordner, mit md5Checksum zum Inhaltsvergleich.
+async function findFile(accessToken, name, parentId) {
+  const q = [
+    `name='${escapeForQuery(name)}'`,
+    `'${parentId}' in parents`,
+    'trashed=false',
+    "mimeType!='application/vnd.google-apps.folder'",
+  ].join(' and ');
+  const url = `${DRIVE_BASE}/files?q=${encodeURIComponent(q)}&fields=files(id,md5Checksum,webViewLink)&pageSize=1`;
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '');
+    throw new Error(`Google-Drive-Suche fehlgeschlagen (${res.status}) fuer ${name}: ${detail}`);
+  }
+  const data = await res.json();
+  return data.files?.[0] ?? null;
+}
+
+// MD5 als Hex (Drive liefert md5Checksum so). Cloudflare Workers koennen MD5 in
+// crypto.subtle; fehlt es, gilt der Inhalt als verschieden -> neuer Name, nie
+// ein Ueberschreiben.
+async function md5Hex(bytes) {
+  try {
+    const hash = await crypto.subtle.digest('MD5', bytes);
+    return [...new Uint8Array(hash)].map((b) => b.toString(16).padStart(2, '0')).join('');
+  } catch (_) {
+    return null;
+  }
+}
+
+// Legt IMMER eine neue Datei an. Ein Ueberschreiben per PATCH gibt es bewusst
+// nicht mehr (siehe uploadDocument).
+async function startResumableSession(accessToken, { filename, parentId, totalBytes, mimeType }) {
   const headers = {
     Authorization: `Bearer ${accessToken}`,
     'Content-Type': 'application/json; charset=UTF-8',
@@ -346,12 +382,10 @@ async function startResumableSession(accessToken, { filename, parentId, existing
     'X-Upload-Content-Length': String(totalBytes),
   };
 
-  const url = existingFileId
-    ? `${DRIVE_UPLOAD_BASE}/files/${existingFileId}?uploadType=resumable&fields=id,webViewLink`
-    : `${DRIVE_UPLOAD_BASE}/files?uploadType=resumable&fields=id,webViewLink`;
-  const body = existingFileId ? JSON.stringify({}) : JSON.stringify({ name: filename, parents: [parentId] });
+  const url = `${DRIVE_UPLOAD_BASE}/files?uploadType=resumable&fields=id,webViewLink`;
+  const body = JSON.stringify({ name: filename, parents: [parentId] });
 
-  const res = await fetch(url, { method: existingFileId ? 'PATCH' : 'POST', headers, body });
+  const res = await fetch(url, { method: 'POST', headers, body });
   if (!res.ok) {
     const detail = await res.text().catch(() => '');
     throw new Error(`Google-Drive-Upload-Session fehlgeschlagen (${res.status}) fuer ${filename}: ${detail}`);
@@ -384,19 +418,39 @@ async function uploadDocument(env, { category, filename, bytes, year }) {
   }
   folderId = await ensureFolder(accessToken, String(year), folderId); // Jahres-Ebene, innerster Ordner
   const categoryId = folderId;
-  const existingFileId = await findChild(accessToken, filename, categoryId, "mimeType!='application/vnd.google-apps.folder'");
+
+  // Der Dateiname kommt aus Datum + Aussteller + Grund. Zwei VERSCHIEDENE Belege
+  // (zwei Bons vom selben Tag aus demselben Markt) ergeben denselben Namen.
+  // Frueher wurde die vorhandene Datei dann per PATCH ueberschrieben, und der
+  // erste Beleg war weg. Jetzt: gleicher Name UND byte-gleicher Inhalt (md5) ist
+  // derselbe Beleg (etwa "Wiederholen" nach abgerissener Antwort) -> nichts neu
+  // hochladen. Sonst bekommt der neue Beleg einen freien Namen mit _2, _3, ...
+  const neuMd5 = await md5Hex(bytes);
+  const punkt = filename.lastIndexOf('.');
+  const stamm = punkt > 0 ? filename.slice(0, punkt) : filename;
+  const endung = punkt > 0 ? filename.slice(punkt) : '';
+  let zielName = null;
+  for (let n = 1; n <= NAMENS_VERSUCHE; n++) {
+    const kandidat = n === 1 ? filename : `${stamm}_${n}${endung}`;
+    const vorhanden = await findFile(accessToken, kandidat, categoryId);
+    if (!vorhanden) { zielName = kandidat; break; }
+    if (neuMd5 && vorhanden.md5Checksum === neuMd5) {
+      return { path: `${ROOT_FOLDER}/${category}/${year}/${kandidat}`, webUrl: vorhanden.webViewLink };
+    }
+  }
+  // Alle Nummern belegt (praktisch nie): Zeitstempel macht den Namen eindeutig.
+  if (!zielName) zielName = `${stamm}_${Date.now()}${endung}`;
 
   const mimeType = 'application/pdf';
   const sessionUrl = await startResumableSession(accessToken, {
-    filename,
+    filename: zielName,
     parentId: categoryId,
-    existingFileId,
     totalBytes: bytes.length,
     mimeType,
   });
   const result = await putContent(sessionUrl, bytes, mimeType);
 
-  return { path: `${ROOT_FOLDER}/${category}/${year}/${filename}`, webUrl: result.webViewLink };
+  return { path: `${ROOT_FOLDER}/${category}/${year}/${zielName}`, webUrl: result.webViewLink };
 }
 
 async function findFolderByPath(accessToken, segments) {

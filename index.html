@@ -629,6 +629,7 @@
       title: 'Ablage',
       items: [
         'Das Ergebnis ist ein durchsuchbares PDF und landet in einem Google-Drive-Ordner, einsortiert nach Kategorie.',
+        'Ergeben zwei verschiedene Belege denselben Dateinamen (gleicher Tag, gleicher Aussteller), bekommt der zweite den Zusatz „_2“ — keiner überschreibt den anderen. Wird derselbe Beleg noch einmal geschickt, entsteht keine zweite Datei.',
         'Die Belege liegen damit bei Google und nicht auf einem Vereinsserver — Näheres steht in der Karte „Datenschutz“.'
       ]
     },
@@ -658,6 +659,18 @@
   ];
 
   const APP_CHANGELOG = [
+    {
+      version: '1.3',
+      groups: [
+        {
+          title: 'Gleichnamige Belege überschreiben sich nicht mehr',
+          items: [
+            'Zwei verschiedene Belege vom selben Tag und demselben Aussteller ergaben bisher denselben Dateinamen, und der zweite ersetzte in Google Drive den ersten. Jetzt bekommt der zweite den Zusatz „_2“ (dann „_3“ usw.).',
+            'Wird derselbe Beleg noch einmal geschickt, etwa über „Wiederholen“, entsteht keine zweite Datei.'
+          ]
+        }
+      ]
+    },
     {
       version: '1.2',
       groups: [
