@@ -321,8 +321,9 @@
     document.getElementById('resultsCard').style.display = 'block';
   }
 
+  // Bewusst ohne `??`: Safari vor iOS 13.4 lehnt sonst das GANZE Skript ab (Bugjagd 25.09.d N1, T9-15).
   function escapeHtml(str) {
-    return String(str ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    return String(str === null || str === undefined ? '' : str).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   }
 
   function toast(msg) {
