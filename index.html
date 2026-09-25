@@ -581,8 +581,11 @@
 
   // Warnen, wenn beim Verlassen/Neuladen noch Vorgänge offen sind (die laufen nur,
   // solange die Seite geöffnet ist – Foto-Aufnahme per Kamera lässt sie offen).
+  // Auch fehlgeschlagene („↻ Wiederholen“) und auf das Passwort wartende Vorgänge
+  // zählen: die Warteschlange liegt nur im Speicher, das Foto wäre danach weg
+  // (Bugjagd 25.09.2026, T12-5). „Verwerfen“ bzw. „Erledigte ausblenden“ räumt sie.
   window.addEventListener('beforeunload', (e) => {
-    if (jobs.some(j => j.status === 'processing' || j.status === 'queued')) {
+    if (jobs.some(j => j.status !== 'done')) {
       e.preventDefault();
       e.returnValue = '';
     }
@@ -638,7 +641,8 @@
       items: [
         'Ein abgeschickter Beleg wandert in die Liste „Vorgänge“. Der nächste lässt sich sofort aufnehmen, ohne zu warten.',
         'Je Vorgang steht dort, ob er läuft, fertig ist oder fehlgeschlagen — bei Erfolg mit Kategorie, Aussteller, Betrag und Ablageort.',
-        'Der Knopf „Erledigte ausblenden“ räumt die Liste wieder auf.'
+        'Der Knopf „Erledigte ausblenden“ räumt die Liste wieder auf.',
+        'Wer die Seite schließt oder neu lädt, solange ein Vorgang läuft, fehlgeschlagen ist oder auf das Passwort wartet, bekommt vorher eine Rückfrage — die Fotos liegen nur auf dieser Seite und wären danach weg.'
       ]
     },
     {
@@ -659,6 +663,17 @@
   ];
 
   const APP_CHANGELOG = [
+    {
+      version: '1.4',
+      groups: [
+        {
+          title: 'Rückfrage beim Schließen auch bei fehlgeschlagenen Belegen',
+          items: [
+            'Wer die Seite schließt oder neu lädt, bekommt jetzt auch dann eine Rückfrage, wenn ein Beleg fehlgeschlagen ist („↻ Wiederholen“) oder auf das Passwort wartet. Bisher kam sie nur bei laufenden Vorgängen, und die Fotos der anderen waren danach ohne Warnung weg.'
+          ]
+        }
+      ]
+    },
     {
       version: '1.3',
       groups: [
